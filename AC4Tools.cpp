@@ -3655,10 +3655,12 @@ void DrawMenu() {
                 DrawInfoRow("Input captured", g_inputCaptured ? "yes" : "no");
                 DrawInfoRowf("Inventory base", "0x%08X", static_cast<unsigned int>(g_inventoryBase));
                 DrawInfoRowf("Inventory pointer writes", "%d", g_inventoryPointerLastWrites);
-                DrawInfoRowf("Unlock records", "%d/%d found, %d patched",
-                             g_unlockPistolsFound,
-                             CountEnabledUnlocks(),
-                             g_unlockPistolsPatched);
+                DrawInfoRowf("Unlock entries", "%d total", kUnlockEntryCount);
+                DrawInfoRowf("Unlock queue", "%d pending", CountEnabledUnlocks());
+                DrawInfoRowf("Unlocks done this session", "%d", g_unlockPistolsPatched);
+                DrawInfoRowf("Unlock records found", "%d last pass", g_unlockPistolsFound);
+                DrawInfoRow("Unlock scan", g_unlockScanRunning != 0 ? "running" : "idle");
+                DrawInfoRow("Community completion", g_finishCommunityChallengesForUnlocks ? "enabled" : "disabled");
                 DrawInfoRow("Global hidden unlocks", g_globalHiddenUnlockInstalled ? "installed" : "not installed");
                 DrawInfoRowf("TimeScale interval", "%d", g_timeScaleInterval);
                 DrawInfoRowf("Last inventory item", "id=0x%02X original=%d applied=%d",
