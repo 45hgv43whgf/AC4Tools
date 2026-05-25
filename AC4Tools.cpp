@@ -766,11 +766,11 @@ void __stdcall ApplyInventoryValue() {
     } else if (g_infiniteRum && itemId == 0x11) {
         g_inventoryValue = 2500;
     } else if (g_infiniteCloth && itemId == 0x12) {
-        g_inventoryValue = 2000;
+        g_inventoryValue = 2500;
     } else if (g_infiniteWood && itemId == 0x13) {
-        g_inventoryValue = 2000;
+        g_inventoryValue = 2500;
     } else if (g_infiniteMetal && itemId == 0x14) {
-        g_inventoryValue = 2000;
+        g_inventoryValue = 2500;
     } else if (g_infiniteSmokeBombs && itemId == 5) {
         g_inventoryValue = 15;
     } else if (g_infiniteBullets && itemId == 0x0B) {
@@ -826,7 +826,7 @@ void MaintainInventoryPointerValues() {
         touched |= WriteInventoryValueByOffset(0x84, 15);
     }
     if (g_infiniteHeavyShotAmmo) {
-        touched |= WriteInventoryValueByOffset(0x88, 20);
+        touched |= WriteInventoryValueByOffset(0x88, 25);
     }
     if (g_infiniteFireBarrels) {
         touched |= WriteInventoryValueByOffset(0x8C, 25);
@@ -856,10 +856,10 @@ void MaintainInventoryPointerValues() {
         touched |= WriteInventoryValueByOffset(0xAC, 1);
     }
     if (g_infiniteCloth) {
-        touched |= WriteInventoryValueByOffset(0x90, 2000);
+        touched |= WriteInventoryValueByOffset(0x90, 2500);
     }
     if (g_infiniteMetal) {
-        touched |= WriteInventoryValueByOffset(0x94, 2000);
+        touched |= WriteInventoryValueByOffset(0x94, 2500);
     }
     if (g_infiniteRum) {
         touched |= WriteInventoryValueByOffset(0x98, 2500);
@@ -868,13 +868,13 @@ void MaintainInventoryPointerValues() {
         touched |= WriteInventoryValueByOffset(0x9C, 2500);
     }
     if (g_infiniteWood) {
-        touched |= WriteInventoryValueByOffset(0xA0, 2000);
+        touched |= WriteInventoryValueByOffset(0xA0, 2500);
     }
 
     if (touched) {
         g_inventoryLastItemId = 0xFF;
         g_inventoryLastOriginalValue = g_inventoryPointerLastWrites;
-        g_inventoryLastAppliedValue = 2000;
+        g_inventoryLastAppliedValue = 2500;
     }
 }
 
@@ -2477,7 +2477,7 @@ void DrawMenu() {
                 }
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "Keeps heavy shot ammo at 20 while enabled.\n"
+                        "Keeps heavy shot ammo at 25 while enabled.\n"
                         "If it does not apply right away, leave the wheel and take control again.\n"
                         "Turning it off leaves the current value as-is.");
                 }

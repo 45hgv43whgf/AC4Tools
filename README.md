@@ -26,7 +26,7 @@ Other game builds may use different code addresses or bytes. If a supported patc
 - Ship Godmode
 - Infinite Ship Crew: keeps ship crew at `40`
 - Infinite Mortar Shot Ammo: keeps mortar shot ammo at `15`
-- Infinite Heavy Shot Ammo: keeps heavy shot ammo at `20`
+- Infinite Heavy Shot Ammo: keeps heavy shot ammo at `25`
 - Infinite Fire Barrels: keeps fire barrels at `25`
 - Ally Godmode: protects all allies, not just allied ships
 - No Cannon Cooldown
@@ -44,9 +44,9 @@ Other game builds may use different code addresses or bytes. If a supported patc
 - Infinite Money: refills to `999999`
 - Infinite Sugar: refills to `2500`
 - Infinite Rum: refills to `2500`
-- Infinite Wood: refills to `2000`
-- Infinite Cloth: refills to `2000`
-- Infinite Metal: refills to `2000`
+- Infinite Wood: refills to `2500`
+- Infinite Cloth: refills to `2500`
+- Infinite Metal: refills to `2500`
 - Infinite Bullets: refills to `30`
 - Infinite Smokebombs: refills to `15`
 - Infinite Sleep Darts: refills to `15`
