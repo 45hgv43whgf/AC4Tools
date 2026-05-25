@@ -243,6 +243,10 @@ bool g_missionTimerPatchReady = false;
 bool g_missionTimer2PatchReady = false;
 bool g_missionTimersPatchReady = false;
 bool g_inventoryPatchReady = false;
+bool g_inventoryPointerPatchReady = false;
+bool g_inventorySetPatchReady = false;
+bool g_inventorySetAltPatchReady = false;
+bool g_inventoryEntrySubtractPatchReady = false;
 bool g_noclipPatchReady = false;
 constexpr int kMenuHotkeyCapture = -2;
 int g_menuHotkey = 'B';
@@ -2844,7 +2848,14 @@ bool InstallPatches() {
     g_missionTimerPatchReady = InstallMissionTimerPatch();
     g_missionTimer2PatchReady = InstallMissionTimer2Patch();
     g_missionTimersPatchReady = g_missionTimerPatchReady || g_missionTimer2PatchReady;
-    g_inventoryPatchReady = InstallInventoryPointerPatch();
+    g_inventoryPointerPatchReady = InstallInventoryPointerPatch();
+    g_inventorySetPatchReady = InstallInventorySetPatch();
+    g_inventorySetAltPatchReady = InstallInventorySetAltPatch();
+    g_inventoryEntrySubtractPatchReady = InstallInventoryEntrySubtractPatch();
+    g_inventoryPatchReady = g_inventoryPointerPatchReady ||
+                            g_inventorySetPatchReady ||
+                            g_inventorySetAltPatchReady ||
+                            g_inventoryEntrySubtractPatchReady;
     g_noclipPatchReady = InstallNoclipUpdatePatch();
 
     if (!g_shipPatchReady) {
@@ -3691,7 +3702,10 @@ void DrawMenu() {
                 DrawPatchRow("No Reload", g_noReloadPatchReady, "0x016B8A96", g_noReloadHits);
                 DrawPatchRow("Mission Timer", g_missionTimerPatchReady, "0x019446C3", g_missionTimerHits);
                 DrawPatchRow("Mission Timer II", g_missionTimer2PatchReady, "0x016869B7", g_missionTimer2Hits);
-                DrawPatchRow("Inventory Pointer", g_inventoryPatchReady, "0x01CFD381", g_inventoryPointerHits);
+                DrawPatchRow("Inventory Pointer", g_inventoryPointerPatchReady, "0x01CFD381", g_inventoryPointerHits);
+                DrawPatchRow("Inventory Set", g_inventorySetPatchReady, "0x011A1F3D", g_inventorySetHits);
+                DrawPatchRow("Inventory Set Alt", g_inventorySetAltPatchReady, "0x011A1F6F", g_inventorySetAltHits);
+                DrawPatchRow("Inventory Subtract", g_inventoryEntrySubtractPatchReady, "0x011A1FA3", g_inventoryEntrySubtractHits);
                 DrawPatchRow("Noclip Update", g_noclipPatchReady, "0x016FAACD", g_noclipUpdateHits);
                 ImGui::EndTable();
             }
