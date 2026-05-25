@@ -2,9 +2,9 @@
 
 AC4Tools is a standalone ASI plugin for **Assassin's Creed IV Black Flag**.
 
-It adds an in-game ImGui menu with ship, player, noclip, time scale, and hotkey options. The plugin is intended to be loaded through Ultimate ASI Loader.
+It adds an in-game ImGui menu with ship, player, inventory/resources, unlocks, noclip, time scale, input/system, and hotkey options. The plugin is intended to be loaded through Ultimate ASI Loader.
 
-Current version: **v1.00**
+Current version: **v1.01**
 
 ## Game Version
 
@@ -55,6 +55,22 @@ Other game builds may use different code addresses or bytes. If a supported patc
 - Infinite Throwing Knives: refills to `1`
 - Infinite Harpoons: refills to `40`
 
+### Unlocks
+
+The Unlocks tab can temporarily unlock selected loaded records. If the game saves afterward, these unlocks can become permanent in that save.
+
+Back up your save before using Unlocks. Saved unlock changes may be irreversible.
+
+Unlocks can irreversibly softlock your save if an unlocked item was supposed to be granted later by a mission, contract, challenge, or other progression event.
+
+- Global Hidden Unlocks: install from the main menu before loading a save; stays active until restart
+- Finish Community Challenges if needed for certain unlocks: optional community-completion handling for entries marked `(CC)`
+- Pistols: Golden Flintlock Pistols, Captain's Wheellock Pistols `(CC)`, Precision Shooter
+- Swords: Pistol Swords, Scottish Broadsword, Persian Scimitars `(CC)`, Crude Iron Machete, Mayan Machete
+- Outfits: Governor Outfit, Templar Outfit, Stealth Outfit, Explorer Outfit `(CC)`
+- Ship Cosmetics: Gilded Sails, The Ranger Figurehead & Queen Anne's Revenge Wheel, Aquila Figurehead, plus selected `(CC)` sails/figureheads/wheels
+- Elite Unlocks: elite Jackdaw upgrades marked `(CC)`
+
 ### Tools
 
 - Noclip with configurable speed and boost speed
@@ -74,7 +90,7 @@ Other game builds may use different code addresses or bytes. If a supported patc
 
 `Ally Godmode` affects all allies, not just allied ships, even though it is grouped under the Ship tab in the UI.
 
-Gameplay feature on/off states are session-only and are not saved. The INI saves numeric settings, hotkey bindings, System-tab options, and the menu window position/size.
+Most gameplay feature on/off states are session-only and are not saved. Unlocks are different: if the game saves after an unlock is applied, that unlock can persist in the save. The INI saves numeric settings, hotkey bindings, System-tab options, and the menu window position/size.
 
 ## Release Layout
 

@@ -20,7 +20,7 @@ copy /y "%ASI_PATH%" "%RELEASE_SCRIPTS%\AC4Tools.asi" >nul
 copy /y "%PROJECT_DIR%AC4Tools.ini" "%RELEASE_SCRIPTS%\AC4Tools.ini" >nul
 
 (
-echo AC4Tools v1.00
+echo AC4Tools v1.01
  echo.
  echo Made/tested for AC4BFSP.exe:
  echo Size: 45,056,040 bytes
@@ -34,6 +34,13 @@ echo AC4Tools v1.00
  echo.
  echo Open/close menu: configured in scripts\AC4Tools.ini under [Hotkeys] MenuOpen. Default is B.
  echo Logging is off by default. Set [Logging] EnableConsole or EnableFile to 1 in scripts\AC4Tools.ini to enable diagnostics.
+ echo.
+ echo Unlocks tab warning:
+ echo - Back up your save before using Unlocks.
+ echo - Unlocks can become permanent/irreversible once the game saves.
+ echo - Unlocks can irreversibly softlock your save if something was meant to unlock later through progression.
+ echo - Entries marked ^(CC^) can optionally finish required community completion when that Unlocks-tab option is enabled.
+ echo - Global Hidden Unlocks should be installed from the main menu before loading a save and stays active until restart.
 ) > "%RELEASE_DIR%\README.txt"
 
 if exist "%ASI_LOADER%" (

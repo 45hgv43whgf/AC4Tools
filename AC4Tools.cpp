@@ -7,6 +7,7 @@
 #include <dxgi.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,8 +29,8 @@ extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wparam
 namespace {
 
 constexpr const char* kToolName = "AC4Tools";
-constexpr const char* kToolVersion = "v1.00";
-constexpr const char* kToolTitle = "AC4Tools v1.00";
+constexpr const char* kToolVersion = "v1.01";
+constexpr const char* kToolTitle = "AC4Tools v1.01";
 constexpr const char* kSupportedGameExe = "AC4BFSP.exe";
 constexpr const char* kSupportedGameSize = "45,056,040 bytes";
 constexpr const char* kSupportedGameTimestamp = "2023-11-14 14:41:36";
@@ -121,6 +122,28 @@ constexpr std::uint8_t kOriginalNoclipUpdateBytes[] = {
     0x8B, 0x8E, 0x08, 0x01, 0x00, 0x00,
 };
 
+constexpr std::uint8_t kGlobalHiddenUnlockWrite1Pattern[] = {
+    0xCC, 0x8A, 0x41, 0x3D, 0x8B, 0x51, 0x24, 0x88, 0x41,
+};
+constexpr std::uint8_t kGlobalHiddenUnlockWrite2Pattern[] = {
+    0x53, 0x56, 0x8B, 0xF1, 0x57, 0x88, 0x46, 0x38, 0xE8,
+};
+constexpr std::uint8_t kGlobalHiddenUnlockVisibilityPattern[] = {
+    0x32, 0xC0, 0x5D, 0xC2, 0x04, 0x00, 0x8A, 0x40, 0x25, 0x5D, 0xC2,
+};
+constexpr std::uint8_t kOriginalGlobalHiddenUnlockWrite1Bytes[] = {
+    0x88, 0x41, 0x38, 0x89, 0x51, 0x0C,
+};
+constexpr std::uint8_t kOriginalGlobalHiddenUnlockWrite2Bytes[] = {
+    0x8B, 0xF1, 0x57, 0x88, 0x46, 0x38,
+};
+constexpr std::uint8_t kOriginalGlobalHiddenUnlockVisibilityBytes[] = {
+    0x8A, 0x40, 0x25,
+};
+constexpr std::uint8_t kEnabledGlobalHiddenUnlockVisibilityBytes[] = {
+    0xB0, 0x01, 0x90,
+};
+
 bool g_enabled = false;
 bool g_noCannonCooldown = false;
 bool g_allyGodmode = false;
@@ -147,6 +170,8 @@ bool g_infiniteRopeDarts = false;
 bool g_infiniteHarpoons = false;
 bool g_infiniteThrowingKnives = false;
 bool g_timeScaleEnabled = false;
+bool g_globalHiddenUnlockInstalled = false;
+bool g_finishCommunityChallengesForUnlocks = false;
 float g_timeScale = 0.01f;
 int g_timeScaleInterval = 10000;
 bool g_noclipEnabled = false;
@@ -184,6 +209,12 @@ std::uint8_t* g_inventorySetCave = nullptr;
 std::uint8_t* g_inventorySetAltCave = nullptr;
 std::uint8_t* g_inventoryEntrySubtractCave = nullptr;
 std::uint8_t* g_noclipUpdateCave = nullptr;
+std::uint8_t* g_globalHiddenUnlockWrite1Address = nullptr;
+std::uint8_t* g_globalHiddenUnlockWrite2Address = nullptr;
+std::uint8_t* g_globalHiddenUnlockVisibilityAddress = nullptr;
+std::uint8_t* g_globalHiddenUnlockCave = nullptr;
+std::uint8_t* g_communityChallengeStorage = nullptr;
+std::uint8_t* g_communityChallengeNext = nullptr;
 int g_inventoryItemId = 0;
 int g_inventoryValue = 0;
 int g_inventoryLastItemId = 0;
@@ -193,6 +224,11 @@ std::uintptr_t g_inventoryBase = 0;
 std::uintptr_t g_bhvAssassin = 0;
 std::uintptr_t g_playerEntity = 0;
 int g_inventoryPointerLastWrites = 0;
+int g_unlockPistolsFound = 0;
+int g_unlockPistolsPatched = 0;
+DWORD g_unlockPistolsLastScan = 0;
+volatile LONG g_unlockScanRequested = 0;
+volatile LONG g_unlockScanRunning = 0;
 int g_missionTimerDiffer = 0;
 int g_missionTimer2Differ = 0;
 bool g_shipPatchReady = false;
@@ -625,6 +661,61 @@ bool BytesMatch(const void* address, const std::uint8_t* expected, std::size_t s
     return memcmp(address, expected, size) == 0;
 }
 
+std::uint8_t* FindMainModulePattern(const std::uint8_t* pattern, std::size_t size) {
+    auto* base = reinterpret_cast<std::uint8_t*>(GetModuleHandleA(nullptr));
+    if (!base || !pattern || size == 0) {
+        return nullptr;
+    }
+
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        return nullptr;
+    }
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.SizeOfImage < size) {
+        return nullptr;
+    }
+
+    const std::size_t imageSize = nt->OptionalHeader.SizeOfImage;
+    for (std::size_t offset = 0; offset + size <= imageSize; ++offset) {
+        if (memcmp(base + offset, pattern, size) == 0) {
+            return base + offset;
+        }
+    }
+    return nullptr;
+}
+
+std::uint8_t* FindMainModulePatternMasked(const std::uint8_t* pattern, const char* mask, std::size_t size) {
+    auto* base = reinterpret_cast<std::uint8_t*>(GetModuleHandleA(nullptr));
+    if (!base || !pattern || !mask || size == 0) {
+        return nullptr;
+    }
+
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        return nullptr;
+    }
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.SizeOfImage < size) {
+        return nullptr;
+    }
+
+    const std::size_t imageSize = nt->OptionalHeader.SizeOfImage;
+    for (std::size_t offset = 0; offset + size <= imageSize; ++offset) {
+        bool matched = true;
+        for (std::size_t i = 0; i < size; ++i) {
+            if (mask[i] == 'x' && base[offset + i] != pattern[i]) {
+                matched = false;
+                break;
+            }
+        }
+        if (matched) {
+            return base + offset;
+        }
+    }
+    return nullptr;
+}
+
 void FormatBytes(const void* bytes, std::size_t size, char* output, std::size_t outputSize) {
     output[0] = '\0';
     const auto* data = static_cast<const std::uint8_t*>(bytes);
@@ -876,6 +967,673 @@ void MaintainInventoryPointerValues() {
         g_inventoryLastOriginalValue = g_inventoryPointerLastWrites;
         g_inventoryLastAppliedValue = 2500;
     }
+}
+
+enum class UnlockCategory {
+    Pistols,
+    Swords,
+    Outfits,
+    ShipCosmetics,
+    EliteUnlocks,
+};
+
+enum class UnlockMode {
+    ItemFlag,
+    NormalBundle,
+};
+
+struct UnlockEntry {
+    const char* name;
+    UnlockCategory category;
+    UnlockMode mode;
+    std::uint8_t group;
+    std::uint8_t id[8];
+    std::uintptr_t flagAddress;
+    bool enabled;
+    bool found;
+    bool patched;
+};
+
+UnlockEntry g_unlockEntries[] = {
+    {"Golden Flintlock Pistols", UnlockCategory::Pistols, UnlockMode::ItemFlag, 0x01, {0xC0, 0x2D, 0x03, 0xEC, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Captain's Wheellock Pistols (CC)", UnlockCategory::Pistols, UnlockMode::ItemFlag, 0x01, {0xF0, 0x2D, 0x03, 0xEC, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Precision Shooter", UnlockCategory::Pistols, UnlockMode::NormalBundle, 0x02, {0x1A, 0x9A, 0x37, 0x66, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
+
+    {"Pistol Swords", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x01, {0xCA, 0x7A, 0x0A, 0x1D, 0x09, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Scottish Broadsword", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x01, {0xA8, 0xC9, 0x45, 0xD2, 0x0C, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Persian Scimitars (CC)", UnlockCategory::Swords, UnlockMode::ItemFlag, 0x01, {0xE2, 0x30, 0x03, 0xEC, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Crude Iron Machete", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x02, {0xFD, 0xCB, 0x57, 0x7B, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Mayan Machete", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x02, {0x22, 0x2F, 0x67, 0x81, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
+
+    {"Governor Outfit", UnlockCategory::Outfits, UnlockMode::NormalBundle, 0x01, {0x27, 0x70, 0x48, 0xD5, 0x0C, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Templar Outfit", UnlockCategory::Outfits, UnlockMode::NormalBundle, 0x01, {0x12, 0x43, 0x85, 0x16, 0x0D, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Stealth Outfit", UnlockCategory::Outfits, UnlockMode::NormalBundle, 0x01, {0xCB, 0x7A, 0x0A, 0x1D, 0x09, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Explorer Outfit (CC)", UnlockCategory::Outfits, UnlockMode::ItemFlag, 0x01, {0x33, 0x6D, 0x1F, 0x1C, 0x09, 0x00, 0x00, 0x00}, 0, false, false, false},
+
+    {"Gilded Sails", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0xF7, 0xF1, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"The Ranger Figurehead & Queen Anne's Revenge Wheel", UnlockCategory::ShipCosmetics, UnlockMode::NormalBundle, 0x01, {0x83, 0xD9, 0x85, 0x3E, 0x0D, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Aquila Figurehead", UnlockCategory::ShipCosmetics, UnlockMode::NormalBundle, 0x01, {0x2A, 0x70, 0x48, 0xD5, 0x0C, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"El Impoluto Figurehead (CC)", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0xC1, 0xEC, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"El Impoluto Wheel (CC)", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0x78, 0xF2, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Black and Red Sails (CC)", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0xE8, 0xF1, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Queen Anne Figurehead (CC)", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0x9E, 0xEC, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Blackwood Wheel (CC)", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0xF7, 0x2D, 0x4A, 0x7B, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Aquila Wheel (CC)", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0x8C, 0xF2, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Flower Sails (CC)", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0x85, 0x2B, 0x4A, 0x7B, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Grey Sails (CC)", UnlockCategory::ShipCosmetics, UnlockMode::ItemFlag, 0x01, {0xED, 0xF1, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, 0, false, false, false},
+
+    {"Elite Hull (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0xE2, 0x45, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Set of Cannons (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0x65, 0xD4, 0x41, 0x72, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Ram (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0x1E, 0x4D, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Round Shot (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0xA5, 0x4A, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Mortars (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0x94, 0x34, 0x9F, 0x5F, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Swivel Guns (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0x4C, 0x4E, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Heavy Shot (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0xC9, 0x4B, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Fire Barrel (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0x2A, 0x50, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Heavy Shot Storage (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0xDB, 0x90, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Mortar Storage (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0xC7, 0x90, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Fire Barrel Storage (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0xE7, 0x90, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Elite Harpoon (CC)", UnlockCategory::EliteUnlocks, UnlockMode::ItemFlag, 0x01, {0x67, 0x51, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
+};
+
+constexpr int kUnlockEntryCount = sizeof(g_unlockEntries) / sizeof(g_unlockEntries[0]);
+constexpr std::uintptr_t kUnlockRecordPointerBackOffset = 8;
+
+int CountUnlockEntries(UnlockCategory category) {
+    int count = 0;
+    for (int i = 0; i < kUnlockEntryCount; ++i) {
+        if (g_unlockEntries[i].category == category) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+int CountEnabledUnlocks() {
+    int count = 0;
+    for (int i = 0; i < kUnlockEntryCount; ++i) {
+        if (g_unlockEntries[i].enabled) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void UpdateUnlockCounters() {
+    g_unlockPistolsFound = 0;
+    g_unlockPistolsPatched = 0;
+    for (int i = 0; i < kUnlockEntryCount; ++i) {
+        if (g_unlockEntries[i].found) {
+            ++g_unlockPistolsFound;
+        }
+        if (g_unlockEntries[i].patched) {
+            ++g_unlockPistolsPatched;
+        }
+    }
+}
+
+bool IsReadableDataPage(DWORD protect) {
+    if ((protect & PAGE_GUARD) != 0 || (protect & PAGE_NOACCESS) != 0) {
+        return false;
+    }
+
+    const DWORD basicProtect = protect & 0xFF;
+    return basicProtect == PAGE_READONLY ||
+           basicProtect == PAGE_READWRITE ||
+           basicProtect == PAGE_WRITECOPY;
+}
+
+bool TryReadPointer(std::uintptr_t address, std::uintptr_t* value) {
+    if (!value) {
+        return false;
+    }
+
+    __try {
+        *value = *reinterpret_cast<std::uintptr_t*>(address);
+        return *value != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool TryReadByte(std::uintptr_t address, std::uint8_t* value) {
+    if (!value) {
+        return false;
+    }
+
+    __try {
+        *value = *reinterpret_cast<std::uint8_t*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool TryReadWord(std::uintptr_t address, std::uint16_t* value) {
+    if (!value) {
+        return false;
+    }
+
+    __try {
+        *value = *reinterpret_cast<std::uint16_t*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool TryReadDword(std::uintptr_t address, std::uint32_t* value) {
+    if (!value) {
+        return false;
+    }
+
+    __try {
+        *value = *reinterpret_cast<std::uint32_t*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool TryWriteByte(std::uintptr_t address, std::uint8_t value) {
+    __try {
+        *reinterpret_cast<std::uint8_t*>(address) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool TryWriteWord(std::uintptr_t address, std::uint16_t value) {
+    __try {
+        *reinterpret_cast<std::uint16_t*>(address) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool TryWriteDword(std::uintptr_t address, std::uint32_t value) {
+    __try {
+        *reinterpret_cast<std::uint32_t*>(address) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool UnlockPatternMatches(const std::uint8_t* bytes, const UnlockEntry& entry) {
+    return bytes[0] == entry.group &&
+           bytes[1] == 0x00 &&
+           bytes[2] == 0x00 &&
+           bytes[3] == 0x80 &&
+           memcmp(bytes + 4, entry.id, 8) == 0;
+}
+
+UnlockEntry* FindUnlockEntry(const std::uint8_t* bytes) {
+    for (int i = 0; i < kUnlockEntryCount; ++i) {
+        if (g_unlockEntries[i].enabled && UnlockPatternMatches(bytes, g_unlockEntries[i])) {
+            return &g_unlockEntries[i];
+        }
+    }
+    return nullptr;
+}
+
+struct CommunityChallengeMapping {
+    std::uint8_t itemId[8];
+    std::uint8_t challengeId[8];
+};
+
+CommunityChallengeMapping g_communityChallengeMappings[] = {
+    {{0xE2, 0x30, 0x03, 0xEC, 0x07, 0x00, 0x00, 0x00}, {0x1A, 0x47, 0x9E, 0xD4, 0x0C, 0x00, 0x00, 0x00}},
+    {{0xF0, 0x2D, 0x03, 0xEC, 0x07, 0x00, 0x00, 0x00}, {0x0A, 0x47, 0x9E, 0xD4, 0x0C, 0x00, 0x00, 0x00}},
+    {{0x33, 0x6D, 0x1F, 0x1C, 0x09, 0x00, 0x00, 0x00}, {0x16, 0x47, 0x9E, 0xD4, 0x0C, 0x00, 0x00, 0x00}},
+    {{0xC1, 0xEC, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, {0x12, 0x47, 0x9E, 0xD4, 0x0C, 0x00, 0x00, 0x00}},
+    {{0x78, 0xF2, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, {0x06, 0x47, 0x9E, 0xD4, 0x0C, 0x00, 0x00, 0x00}},
+    {{0xE8, 0xF1, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, {0x0E, 0x47, 0x9E, 0xD4, 0x0C, 0x00, 0x00, 0x00}},
+    {{0x9E, 0xEC, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, {0x1F, 0x37, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0xF7, 0x2D, 0x4A, 0x7B, 0x07, 0x00, 0x00, 0x00}, {0xC2, 0xB0, 0x24, 0x2F, 0x08, 0x00, 0x00, 0x00}},
+    {{0x8C, 0xF2, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, {0x23, 0x37, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0x85, 0x2B, 0x4A, 0x7B, 0x07, 0x00, 0x00, 0x00}, {0xC6, 0xB0, 0x24, 0x2F, 0x08, 0x00, 0x00, 0x00}},
+    {{0xED, 0xF1, 0x34, 0x7A, 0x08, 0x00, 0x00, 0x00}, {0x17, 0x37, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0xE2, 0x45, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, {0xE3, 0x36, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0x65, 0xD4, 0x41, 0x72, 0x07, 0x00, 0x00, 0x00}, {0xEB, 0x36, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0x1E, 0x4D, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, {0xE7, 0x36, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0xA5, 0x4A, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, {0xFB, 0x36, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0x94, 0x34, 0x9F, 0x5F, 0x07, 0x00, 0x00, 0x00}, {0xF3, 0x36, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0x4C, 0x4E, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, {0xF7, 0x36, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0xC9, 0x4B, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, {0x07, 0x37, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0x2A, 0x50, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, {0x0B, 0x37, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+    {{0xDB, 0x90, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}, {0xEA, 0x9A, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}},
+    {{0xC7, 0x90, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}, {0xE2, 0x9A, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}},
+    {{0xE7, 0x90, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}, {0xE6, 0x9A, 0xCA, 0xF3, 0x07, 0x00, 0x00, 0x00}},
+    {{0x67, 0x51, 0xC8, 0x73, 0x07, 0x00, 0x00, 0x00}, {0x13, 0x37, 0xCF, 0xB0, 0x07, 0x00, 0x00, 0x00}},
+};
+
+const std::uint8_t* FindCommunityChallengeId(const UnlockEntry& entry) {
+    for (int i = 0; i < static_cast<int>(sizeof(g_communityChallengeMappings) / sizeof(g_communityChallengeMappings[0])); ++i) {
+        if (memcmp(entry.id, g_communityChallengeMappings[i].itemId, sizeof(entry.id)) == 0) {
+            return g_communityChallengeMappings[i].challengeId;
+        }
+    }
+    return nullptr;
+}
+
+std::uintptr_t FindUnlockRecordSlot(const std::uint8_t* id) {
+    if (!id) {
+        return 0;
+    }
+
+    const std::uint8_t patternPrefix[] = {0x01, 0x00, 0x00, 0x80};
+    SYSTEM_INFO systemInfo{};
+    GetSystemInfo(&systemInfo);
+    std::uintptr_t address = reinterpret_cast<std::uintptr_t>(systemInfo.lpMinimumApplicationAddress);
+    const std::uintptr_t maxAddress = reinterpret_cast<std::uintptr_t>(systemInfo.lpMaximumApplicationAddress);
+
+    while (address < maxAddress) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi)) == 0) {
+            address += 0x10000;
+            continue;
+        }
+
+        const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+        const std::uintptr_t next = base + mbi.RegionSize;
+        if (mbi.State == MEM_COMMIT &&
+            IsReadableDataPage(mbi.Protect) &&
+            mbi.RegionSize >= 12 &&
+            mbi.RegionSize <= 0x400000) {
+            auto* bytes = reinterpret_cast<const std::uint8_t*>(base);
+            __try {
+                for (std::size_t offset = 0; offset + 12 <= mbi.RegionSize; ++offset) {
+                    if (memcmp(bytes + offset, patternPrefix, sizeof(patternPrefix)) == 0 &&
+                        memcmp(bytes + offset + 4, id, 8) == 0 &&
+                        base + offset >= kUnlockRecordPointerBackOffset) {
+                        return base + offset - kUnlockRecordPointerBackOffset;
+                    }
+                }
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+        }
+
+        if (next <= address) {
+            break;
+        }
+        address = next;
+    }
+    return 0;
+}
+
+std::uintptr_t FindCommunityHandlerValue() {
+    const std::uint8_t pattern[] = {
+        0x8D, 0x4E, 0x5C, 0xC7, 0x06, 0x00, 0x00, 0x00, 0x00,
+        0xE8, 0x00, 0x00, 0x00, 0x00, 0xC6, 0x46, 0x64, 0x00,
+    };
+    const char mask[] = "xxxxx????x????xxxx";
+    auto* hit = FindMainModulePatternMasked(pattern, mask, sizeof(pattern));
+    if (!hit) {
+        return 0;
+    }
+
+    std::uint32_t value = 0;
+    return TryReadDword(reinterpret_cast<std::uintptr_t>(hit + 5), &value) ? value : 0;
+}
+
+std::uintptr_t FindCommunityMemMap2() {
+    const std::uint8_t pattern[] = {
+        0x3B, 0xF3, 0x74, 0x35, 0x57, 0x8B, 0x3E, 0x85, 0xFF, 0x74, 0x1D, 0x8B, 0x0D,
+    };
+    auto* hit = FindMainModulePattern(pattern, sizeof(pattern));
+    if (!hit) {
+        return 0;
+    }
+
+    std::uint32_t memMapAddress = 0;
+    std::uint32_t memMapRoot = 0;
+    std::uint32_t memMap2 = 0;
+    if (!TryReadDword(reinterpret_cast<std::uintptr_t>(hit + 13), &memMapAddress) ||
+        !TryReadDword(memMapAddress, &memMapRoot) ||
+        !TryReadDword(memMapRoot + 444, &memMap2)) {
+        return 0;
+    }
+    return memMap2;
+}
+
+void MarkCommunityAllocation(std::uintptr_t allocation) {
+    const std::uintptr_t memMap2 = FindCommunityMemMap2();
+    if (memMap2 != 0) {
+        TryWriteByte(memMap2 + (allocation >> 16), 129);
+    }
+}
+
+std::uint8_t* AllocateCommunityMemory(std::size_t size) {
+    auto* memory = static_cast<std::uint8_t*>(
+        VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    if (memory) {
+        MarkCommunityAllocation(reinterpret_cast<std::uintptr_t>(memory));
+    }
+    return memory;
+}
+
+bool FindCommunityChallengeList(std::uintptr_t* listFound) {
+    if (!listFound) {
+        return false;
+    }
+
+    const std::uintptr_t handlerValue = FindCommunityHandlerValue();
+    if (handlerValue == 0) {
+        return false;
+    }
+
+    SYSTEM_INFO systemInfo{};
+    GetSystemInfo(&systemInfo);
+    std::uintptr_t address = reinterpret_cast<std::uintptr_t>(systemInfo.lpMinimumApplicationAddress);
+    const std::uintptr_t maxAddress = reinterpret_cast<std::uintptr_t>(systemInfo.lpMaximumApplicationAddress);
+
+    while (address < maxAddress) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi)) == 0) {
+            address += 0x10000;
+            continue;
+        }
+
+        const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+        const std::uintptr_t next = base + mbi.RegionSize;
+        if (mbi.State == MEM_COMMIT &&
+            IsReadableDataPage(mbi.Protect) &&
+            mbi.RegionSize >= sizeof(std::uint32_t) &&
+            mbi.RegionSize <= 0x400000) {
+            auto* bytes = reinterpret_cast<const std::uint8_t*>(base);
+            __try {
+                for (std::size_t offset = 0; offset + sizeof(std::uint32_t) <= mbi.RegionSize; offset += 4) {
+                    if (*reinterpret_cast<const std::uint32_t*>(bytes + offset) != handlerValue) {
+                        continue;
+                    }
+                    const std::uintptr_t candidate = base + offset;
+                    std::uintptr_t point1 = 0;
+                    std::uintptr_t point1Level1 = 0;
+                    std::uintptr_t point1Level2 = 0;
+                    std::uintptr_t point2 = 0;
+                    std::uintptr_t list = 0;
+                    std::uint8_t marker = 0;
+                    if (TryReadPointer(candidate + 0x20, &point1) &&
+                        point1 != candidate &&
+                        TryReadPointer(point1 + 0x5C, &point1Level1) &&
+                        TryReadPointer(point1Level1, &point1Level2) &&
+                        TryReadPointer(point1Level2 + 0x0C, &point2) &&
+                        TryReadPointer(point2 + 0x08, &list) &&
+                        TryReadByte(list + 0x04, &marker) &&
+                        marker == 9) {
+                        *listFound = list;
+                        return true;
+                    }
+                }
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+        }
+
+        if (next <= address) {
+            break;
+        }
+        address = next;
+    }
+    return false;
+}
+
+bool FinishCommunityChallengeForUnlock(const UnlockEntry& entry) {
+    const std::uint8_t* challengeId = FindCommunityChallengeId(entry);
+    if (!challengeId) {
+        return false;
+    }
+
+    const std::uintptr_t challengeRecordSlot = FindUnlockRecordSlot(challengeId);
+    if (challengeRecordSlot == 0) {
+        Logf("%s community challenge not finished: challenge record was not found.", entry.name);
+        return false;
+    }
+
+    std::uintptr_t listFound = 0;
+    if (!FindCommunityChallengeList(&listFound)) {
+        Logf("%s community challenge not finished: challenge list was not found.", entry.name);
+        return false;
+    }
+
+    std::uint16_t length = 0;
+    std::uint16_t capacity = 0;
+    std::uintptr_t listArray = 0;
+    if (!TryReadWord(listFound + 0x16, &length) ||
+        !TryReadWord(listFound + 0x14, &capacity) ||
+        !TryReadPointer(listFound + 0x10, &listArray) ||
+        length > 1760) {
+        Logf("%s community challenge not finished: challenge list metadata was invalid.", entry.name);
+        return false;
+    }
+
+    if (!g_communityChallengeStorage) {
+        g_communityChallengeStorage = AllocateCommunityMemory(8192);
+        if (!g_communityChallengeStorage) {
+            Log("Community challenge storage allocation failed.");
+            return false;
+        }
+        g_communityChallengeNext = g_communityChallengeStorage + 0x400;
+    }
+
+    if (g_communityChallengeNext + 12 > g_communityChallengeStorage + 8192) {
+        Log("Community challenge storage is full.");
+        return false;
+    }
+
+    std::uint32_t const1 = 0;
+    std::uint32_t const2 = 0;
+    std::uintptr_t firstEntry = 0;
+    if (!TryReadPointer(listArray, &firstEntry) ||
+        !TryReadDword(firstEntry, &const1) ||
+        !TryReadDword(firstEntry + 0x08, &const2)) {
+        Logf("%s community challenge not finished: challenge list template was invalid.", entry.name);
+        return false;
+    }
+
+    if (static_cast<unsigned int>(length) + 1 >= capacity) {
+        const std::size_t expandedSize = static_cast<std::size_t>(capacity) * sizeof(std::uint32_t) + 100;
+        std::uint8_t* expanded = AllocateCommunityMemory(expandedSize);
+        if (!expanded) {
+            Log("Community challenge list expansion allocation failed.");
+            return false;
+        }
+        memcpy(expanded, reinterpret_cast<void*>(listArray), static_cast<std::size_t>(length) * sizeof(std::uint32_t));
+        if (!TryWriteDword(reinterpret_cast<std::uintptr_t>(expanded) + 4 * length,
+                           reinterpret_cast<std::uint32_t>(g_communityChallengeNext)) ||
+            !TryWriteDword(listFound + 0x10, reinterpret_cast<std::uint32_t>(expanded)) ||
+            !TryWriteWord(listFound + 0x14, capacity + 10)) {
+            return false;
+        }
+    } else if (!TryWriteDword(listArray + 4 * length, reinterpret_cast<std::uint32_t>(g_communityChallengeNext))) {
+        return false;
+    }
+
+    const std::uintptr_t newEntry = reinterpret_cast<std::uintptr_t>(g_communityChallengeNext);
+    if (!TryWriteDword(newEntry, const1) ||
+        !TryWriteDword(newEntry + 0x04, static_cast<std::uint32_t>(challengeRecordSlot)) ||
+        !TryWriteDword(newEntry + 0x08, const2) ||
+        !TryWriteWord(listFound + 0x16, length + 1)) {
+        return false;
+    }
+
+    g_communityChallengeNext += 12;
+    Logf("%s community challenge completion added.", entry.name);
+    return true;
+}
+
+void ApplyItemFlagUnlockEntry(UnlockEntry& entry, std::uintptr_t matchAddress) {
+    std::uintptr_t item = 0;
+    if (matchAddress < kUnlockRecordPointerBackOffset ||
+        !TryReadPointer(matchAddress - kUnlockRecordPointerBackOffset, &item)) {
+        return;
+    }
+
+    std::uint8_t currentValue = 0;
+    const std::uintptr_t flagAddress = item + 0x38;
+    if (!TryReadByte(flagAddress, &currentValue)) {
+        return;
+    }
+
+    entry.found = true;
+    entry.flagAddress = flagAddress;
+
+    const bool unlockedNow = currentValue != 0 && TryWriteByte(flagAddress, 0);
+    if (unlockedNow) {
+        entry.patched = true;
+        if (g_finishCommunityChallengesForUnlocks) {
+            FinishCommunityChallengeForUnlock(entry);
+        }
+    } else if (currentValue == 0) {
+        entry.patched = true;
+    }
+}
+
+void ApplyNormalBundleUnlockEntry(UnlockEntry& entry, std::uintptr_t matchAddress) {
+    std::uintptr_t bundle = 0;
+    if (matchAddress < kUnlockRecordPointerBackOffset ||
+        !TryReadPointer(matchAddress - kUnlockRecordPointerBackOffset, &bundle)) {
+        return;
+    }
+
+    std::uint8_t bundleState = 0;
+    if (!TryReadByte(bundle + 0x0C, &bundleState)) {
+        return;
+    }
+
+    entry.found = true;
+    entry.flagAddress = bundle + 0x0C;
+    bool patched = false;
+    if (bundleState == 1 && TryWriteByte(bundle + 0x0C, 3)) {
+        patched = true;
+    } else if (bundleState == 3) {
+        patched = true;
+    }
+
+    std::uintptr_t first = 0;
+    std::uintptr_t second = 0;
+    std::uintptr_t list = 0;
+    if (TryReadPointer(bundle + 0x3C, &first) &&
+        TryReadPointer(first, &second) &&
+        TryReadPointer(second + 0x08, &list)) {
+        std::uintptr_t itemPointerTable = 0;
+        std::uint8_t count = 0;
+        if (TryReadPointer(list + 0x24, &itemPointerTable) &&
+            TryReadByte(list + 0x2A, &count)) {
+            for (int i = 0; i < count && i < 64; ++i) {
+                std::uintptr_t holder = 0;
+                std::uintptr_t child = 0;
+                if (TryReadPointer(itemPointerTable + i * sizeof(std::uintptr_t), &holder) &&
+                    TryReadPointer(holder, &child)) {
+                    std::uint8_t childState = 0;
+                    if (TryReadByte(child + 0x38, &childState)) {
+                        if (childState != 0 && TryWriteByte(child + 0x38, 0)) {
+                            patched = true;
+                        } else if (childState == 0) {
+                            patched = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    entry.patched = patched;
+}
+
+void ApplyUnlockEntry(UnlockEntry& entry, std::uintptr_t matchAddress) {
+    if (entry.mode == UnlockMode::ItemFlag) {
+        ApplyItemFlagUnlockEntry(entry, matchAddress);
+    } else {
+        ApplyNormalBundleUnlockEntry(entry, matchAddress);
+    }
+}
+
+void ScanUnlockRegion(std::uintptr_t base, std::size_t size) {
+    auto* bytes = reinterpret_cast<const std::uint8_t*>(base);
+    __try {
+        for (std::size_t offset = 0; offset + 12 <= size; ++offset) {
+            if (bytes[offset + 1] != 0x00 ||
+                bytes[offset + 2] != 0x00 ||
+                bytes[offset + 3] != 0x80) {
+                continue;
+            }
+            UnlockEntry* entry = FindUnlockEntry(bytes + offset);
+            if (entry) {
+                ApplyUnlockEntry(*entry, base + offset);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void ScanAndApplyUnlocks() {
+    if (InterlockedCompareExchange(&g_unlockScanRunning, 1, 0) != 0) {
+        return;
+    }
+
+    for (int i = 0; i < kUnlockEntryCount; ++i) {
+        g_unlockEntries[i].found = false;
+        g_unlockEntries[i].patched = false;
+    }
+
+    SYSTEM_INFO systemInfo{};
+    GetSystemInfo(&systemInfo);
+    std::uintptr_t address = reinterpret_cast<std::uintptr_t>(systemInfo.lpMinimumApplicationAddress);
+    const std::uintptr_t maxAddress = reinterpret_cast<std::uintptr_t>(systemInfo.lpMaximumApplicationAddress);
+
+    while (address < maxAddress) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi)) == 0) {
+            address += 0x10000;
+            continue;
+        }
+
+        const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+        const std::uintptr_t next = base + mbi.RegionSize;
+        if (mbi.State == MEM_COMMIT &&
+            IsReadableDataPage(mbi.Protect) &&
+            mbi.RegionSize >= 12 &&
+            mbi.RegionSize <= 0x400000) {
+            ScanUnlockRegion(base, mbi.RegionSize);
+        }
+
+        if (next <= address) {
+            break;
+        }
+        address = next;
+    }
+
+    UpdateUnlockCounters();
+    Logf("Unlock scan finished: enabled=%d found=%d patched=%d.",
+         CountEnabledUnlocks(),
+         g_unlockPistolsFound,
+         g_unlockPistolsPatched);
+    for (int i = 0; i < kUnlockEntryCount; ++i) {
+        if (g_unlockEntries[i].enabled && g_unlockEntries[i].patched) {
+            g_unlockEntries[i].enabled = false;
+        }
+    }
+    InterlockedExchange(&g_unlockScanRunning, 0);
+}
+
+void MaintainUnlocks() {
+    if (CountEnabledUnlocks() == 0) {
+        g_unlockPistolsLastScan = 0;
+        UpdateUnlockCounters();
+        InterlockedExchange(&g_unlockScanRequested, 0);
+        return;
+    }
+
+    const DWORD now = GetTickCount();
+    const bool requested = InterlockedExchange(&g_unlockScanRequested, 0) != 0;
+    if (!requested && g_unlockPistolsLastScan != 0 && now - g_unlockPistolsLastScan < 15000) {
+        return;
+    }
+    g_unlockPistolsLastScan = now;
+    ScanAndApplyUnlocks();
 }
 
 void LoadConfig() {
@@ -1817,6 +2575,75 @@ bool InstallNoclipUpdatePatch() {
     return true;
 }
 
+bool InstallGlobalHiddenUnlockPatch() {
+    if (g_globalHiddenUnlockInstalled) {
+        return true;
+    }
+
+    auto* write1Pattern = FindMainModulePattern(kGlobalHiddenUnlockWrite1Pattern, sizeof(kGlobalHiddenUnlockWrite1Pattern));
+    auto* write2Pattern = FindMainModulePattern(kGlobalHiddenUnlockWrite2Pattern, sizeof(kGlobalHiddenUnlockWrite2Pattern));
+    auto* visibilityPattern = FindMainModulePattern(kGlobalHiddenUnlockVisibilityPattern, sizeof(kGlobalHiddenUnlockVisibilityPattern));
+    if (!write1Pattern || !write2Pattern || !visibilityPattern) {
+        Log("Global Hidden Unlocks unavailable: signatures were not found.");
+        return false;
+    }
+
+    g_globalHiddenUnlockWrite1Address = write1Pattern + 7;
+    g_globalHiddenUnlockWrite2Address = write2Pattern + 2;
+    g_globalHiddenUnlockVisibilityAddress = visibilityPattern + 6;
+
+    if (!BytesMatch(g_globalHiddenUnlockWrite1Address,
+                    kOriginalGlobalHiddenUnlockWrite1Bytes,
+                    sizeof(kOriginalGlobalHiddenUnlockWrite1Bytes)) ||
+        !BytesMatch(g_globalHiddenUnlockWrite2Address,
+                    kOriginalGlobalHiddenUnlockWrite2Bytes,
+                    sizeof(kOriginalGlobalHiddenUnlockWrite2Bytes)) ||
+        !BytesMatch(g_globalHiddenUnlockVisibilityAddress,
+                    kOriginalGlobalHiddenUnlockVisibilityBytes,
+                    sizeof(kOriginalGlobalHiddenUnlockVisibilityBytes))) {
+        Log("Global Hidden Unlocks unavailable: patch bytes are not in their original state.");
+        return false;
+    }
+
+    g_globalHiddenUnlockCave = static_cast<std::uint8_t*>(
+        VirtualAlloc(nullptr, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!g_globalHiddenUnlockCave) {
+        Log("VirtualAlloc failed for Global Hidden Unlocks patch.");
+        return false;
+    }
+
+    std::uint8_t* p = g_globalHiddenUnlockCave;
+    *p++ = 0xC6; *p++ = 0x41; *p++ = 0x38; *p++ = 0x00; // mov byte ptr [ecx+38],0
+    *p++ = 0x89; *p++ = 0x51; *p++ = 0x0C; // mov [ecx+0C],edx
+    EmitJump(p, reinterpret_cast<std::uintptr_t>(g_globalHiddenUnlockWrite1Address + sizeof(kOriginalGlobalHiddenUnlockWrite1Bytes)));
+
+    p = g_globalHiddenUnlockCave + 0x20;
+    *p++ = 0x8B; *p++ = 0xF1; // mov esi,ecx
+    *p++ = 0x57; // push edi
+    *p++ = 0xC6; *p++ = 0x46; *p++ = 0x38; *p++ = 0x00; // mov byte ptr [esi+38],0
+    EmitJump(p, reinterpret_cast<std::uintptr_t>(g_globalHiddenUnlockWrite2Address + sizeof(kOriginalGlobalHiddenUnlockWrite2Bytes)));
+
+    if (!WriteJump(g_globalHiddenUnlockWrite1Address,
+                   g_globalHiddenUnlockCave,
+                   sizeof(kOriginalGlobalHiddenUnlockWrite1Bytes)) ||
+        !WriteJump(g_globalHiddenUnlockWrite2Address,
+                   g_globalHiddenUnlockCave + 0x20,
+                   sizeof(kOriginalGlobalHiddenUnlockWrite2Bytes)) ||
+        !WriteMemory(g_globalHiddenUnlockVisibilityAddress,
+                     kEnabledGlobalHiddenUnlockVisibilityBytes,
+                     sizeof(kEnabledGlobalHiddenUnlockVisibilityBytes))) {
+        Log("Global Hidden Unlocks failed: could not write patches.");
+        return false;
+    }
+
+    g_globalHiddenUnlockInstalled = true;
+    Logf("Installed Global Hidden Unlocks patches at 0x%08X, 0x%08X, visibility 0x%08X.",
+         static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(g_globalHiddenUnlockWrite1Address)),
+         static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(g_globalHiddenUnlockWrite2Address)),
+         static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(g_globalHiddenUnlockVisibilityAddress)));
+    return true;
+}
+
 bool InstallNoReloadPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchNoReloadAddress);
     if (patchAddress[0] == 0xE9) {
@@ -2524,7 +3351,7 @@ void DrawMenu() {
             if (!g_playerHealthPatchReady && !g_infiniteBreathPatchReady && !g_noReloadPatchReady && !g_inventoryPatchReady) {
                 ImGui::TextDisabled("Player options unavailable: hooks were not installed.");
             } else {
-                ImGui::Columns(3, "PlayerCheatColumns", false);
+                ImGui::Columns(3, "PlayerColumns", false);
 
                 if (g_playerHealthPatchReady) {
                     ImGui::Checkbox("God Mode", &g_playerGodmode);
@@ -2677,6 +3504,84 @@ void DrawMenu() {
             }
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Unlocks")) {
+            ImGui::TextDisabled("Best used from the ship cabin, where weapon/outfit records are loaded.");
+            ImGui::TextDisabled("Back up your save first: unlocks can become permanent/irreversible once the game saves.");
+            ImGui::TextDisabled("Unlocks can softlock saves if something was meant to unlock later through progression.");
+            ImGui::TextDisabled("Per-item unlocks auto-uncheck after success and stay unlocked for this game session.");
+            ImGui::Separator();
+
+            if (g_globalHiddenUnlockInstalled) {
+                ImGui::TextDisabled("Global Hidden Unlocks installed for this session.");
+            } else if (ImGui::Button("Install Global Hidden Unlocks")) {
+                InstallGlobalHiddenUnlockPatch();
+            }
+            ImGui::TextDisabled("Use at the main menu before loading a save; can be saved permanently by the game.");
+            ImGui::TextDisabled("Recommended only with a save backup.");
+            ImGui::Checkbox("Finish Community Challenges if needed for certain unlocks", &g_finishCommunityChallengesForUnlocks);
+            ImGui::TextDisabled("Only affects entries that require community completion (CC); normal unlocks ignore this.");
+            ImGui::Separator();
+
+            auto drawUnlockCategory = [](const char* label, UnlockCategory category) {
+                ImGui::TextUnformatted(label);
+                if (ImGui::BeginTable(label, 2, ImGuiTableFlags_SizingStretchProp)) {
+                    ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                    for (int i = 0; i < kUnlockEntryCount; ++i) {
+                        UnlockEntry& entry = g_unlockEntries[i];
+                        if (entry.category != category) {
+                            continue;
+                        }
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        bool enabled = entry.enabled;
+                        ImGui::PushID(i);
+                        if (ImGui::Checkbox(entry.name, &enabled)) {
+                            entry.enabled = enabled;
+                            entry.found = false;
+                            entry.patched = false;
+                            g_unlockPistolsLastScan = 0;
+                            if (entry.enabled) {
+                                InterlockedExchange(&g_unlockScanRequested, 1);
+                            }
+                            UpdateUnlockCounters();
+                            Logf("%s unlock %s.", entry.name, entry.enabled ? "queued" : "cancelled");
+                        }
+                        ImGui::PopID();
+                        ImGui::TableSetColumnIndex(1);
+                        if (entry.patched) {
+                            ImGui::TextDisabled(entry.enabled ? "unlocked" : "done");
+                        } else if (entry.found) {
+                            ImGui::TextDisabled("found");
+                        } else if (entry.enabled) {
+                            ImGui::TextDisabled("waiting");
+                        } else {
+                            ImGui::TextDisabled("ready");
+                        }
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::Spacing();
+            };
+
+            drawUnlockCategory("Pistols", UnlockCategory::Pistols);
+            drawUnlockCategory("Swords", UnlockCategory::Swords);
+            drawUnlockCategory("Outfits", UnlockCategory::Outfits);
+            drawUnlockCategory("Ship Cosmetics", UnlockCategory::ShipCosmetics);
+            drawUnlockCategory("Elite Unlocks", UnlockCategory::EliteUnlocks);
+
+            ImGui::Spacing();
+            const int enabledCount = CountEnabledUnlocks();
+            ImGui::Text("Pending: %d", enabledCount);
+            ImGui::Text("Done this session: %d", g_unlockPistolsPatched);
+            if (g_unlockScanRunning != 0) {
+                ImGui::TextDisabled("Scan running in background...");
+            }
+            if (enabledCount > 0) {
+                ImGui::TextDisabled("If an item stays waiting, go to the ship cabin and keep it checked.");
+            }
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Hotkeys")) {
             DrawHotkeysTab();
             ImGui::EndTabItem();
@@ -2750,6 +3655,11 @@ void DrawMenu() {
                 DrawInfoRow("Input captured", g_inputCaptured ? "yes" : "no");
                 DrawInfoRowf("Inventory base", "0x%08X", static_cast<unsigned int>(g_inventoryBase));
                 DrawInfoRowf("Inventory pointer writes", "%d", g_inventoryPointerLastWrites);
+                DrawInfoRowf("Unlock records", "%d/%d found, %d patched",
+                             g_unlockPistolsFound,
+                             CountEnabledUnlocks(),
+                             g_unlockPistolsPatched);
+                DrawInfoRow("Global hidden unlocks", g_globalHiddenUnlockInstalled ? "installed" : "not installed");
                 DrawInfoRowf("TimeScale interval", "%d", g_timeScaleInterval);
                 DrawInfoRowf("Last inventory item", "id=0x%02X original=%d applied=%d",
                              g_inventoryLastItemId,
@@ -3130,7 +4040,7 @@ void InitConsole() {
     if (!AllocConsole()) {
         return;
     }
-    SetConsoleTitleA("AC4Tools v1.00 Log");
+    SetConsoleTitleA("AC4Tools v1.01 Log");
     freopen_s(&g_consoleOut, "CONOUT$", "w", stdout);
     FILE* consoleErr = nullptr;
     freopen_s(&consoleErr, "CONOUT$", "w", stderr);
@@ -3160,6 +4070,7 @@ DWORD WINAPI MainThread(void*) {
         UpdateTimeScaleInterval();
         ApplyNoCannonCooldownPatch();
         ApplyStealthModePatch();
+        MaintainUnlocks();
     }
     return 0;
 }
