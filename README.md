@@ -218,9 +218,9 @@ Hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Use the in-ga
 
 ## Third-Party Components
 
-- Dear ImGui
-- MinHook
-- Ultimate ASI Loader, included in `release_assets/dinput8.dll` for packaging
+- Dear ImGui by Omar Cornut and contributors (v1.90.9)
+- MinHook by Tsuda Kageyu (Includes HDE disassembler code by Vyacheslav Patkov.)
+- Ultimate ASI Loader by ThirteenAG (9.7.1.0-2155f21)
 
 ## Compatibility
 
