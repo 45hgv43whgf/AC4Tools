@@ -245,6 +245,8 @@ bool g_infiniteBreathPatchReady = false;
 bool g_stealthModePatchReady = false;
 bool g_noReloadPatchReady = false;
 bool g_lockConsumablesPatchReady = false;
+bool g_lockConsumablesHotkeyReady = true;
+bool g_lockConsumablesInstallFailed = false;
 bool g_missionTimerPatchReady = false;
 bool g_missionTimer2PatchReady = false;
 bool g_missionTimersPatchReady = false;
@@ -302,6 +304,7 @@ void InitConsole();
 void __stdcall UpdateNoclipState();
 void UpdateTimeScaleInterval();
 void UpdateFreeCam();
+bool InstallLockConsumablesPatch();
 bool InstallFreeCamPatch();
 void ApplyNoCannonCooldownPatch();
 void ApplyStealthModePatch();
@@ -321,6 +324,16 @@ void AfterNoclipToggle() {
 
 void AfterTimeScaleToggle() {
     UpdateTimeScaleInterval();
+}
+
+void AfterLockConsumablesToggle() {
+    if (!g_lockConsumables) {
+        return;
+    }
+    if (!g_lockConsumablesPatchReady && !InstallLockConsumablesPatch()) {
+        g_lockConsumables = false;
+        return;
+    }
 }
 
 void AfterFreeCamToggle() {
@@ -351,7 +364,7 @@ ToggleAction g_actions[] = {
     {"InfiniteBreath", "Infinite Breath", &g_infiniteBreath, &g_infiniteBreathPatchReady, 0, nullptr},
     {"StealthMode", "Stealth Mode", &g_stealthMode, &g_stealthModePatchReady, 0, &AfterStealthModeToggle},
     {"NoReload", "No Reload", &g_noReload, &g_noReloadPatchReady, 0, nullptr},
-    {"LockConsumables", "Lock Consumables", &g_lockConsumables, &g_lockConsumablesPatchReady, 0, nullptr},
+    {"LockConsumables", "Lock Consumables", &g_lockConsumables, &g_lockConsumablesHotkeyReady, 0, &AfterLockConsumablesToggle},
     {"FreezeMissionTimer", "Freeze Mission Timer", &g_freezeMissionTimer, &g_missionTimersPatchReady, 0, nullptr},
     {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, &AfterNoclipToggle},
     {"TimeScale", "Time Scale", &g_timeScaleEnabled, &g_timeScalePatchReady, 0, &AfterTimeScaleToggle},
@@ -578,10 +591,10 @@ void Log(const char* message) {
 }
 
 void Logf(const char* format, ...) {
-    char message[160]{};
+    char message[512]{};
     va_list args;
     va_start(args, format);
-    vsprintf_s(message, format, args);
+    vsnprintf_s(message, sizeof(message), _TRUNCATE, format, args);
     va_end(args);
     Log(message);
 }
@@ -2569,9 +2582,13 @@ bool InstallInfiniteBreathPatch() {
 }
 
 bool InstallLockConsumablesPatch() {
+    if (g_lockConsumablesPatchReady) {
+        return true;
+    }
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchLockConsumablesAddress);
     if (patchAddress[0] == 0xE9) {
         Log("Refusing Lock Consumables patch: 0x011A1F6D is already hooked by another tool.");
+        g_lockConsumablesInstallFailed = true;
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalLockConsumablesBytes, sizeof(kOriginalLockConsumablesBytes))) {
@@ -2579,6 +2596,7 @@ bool InstallLockConsumablesPatch() {
                          patchAddress,
                          kOriginalLockConsumablesBytes,
                          sizeof(kOriginalLockConsumablesBytes));
+        g_lockConsumablesInstallFailed = true;
         return false;
     }
 
@@ -2586,6 +2604,7 @@ bool InstallLockConsumablesPatch() {
         VirtualAlloc(nullptr, 80, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_lockConsumablesCave) {
         Log("VirtualAlloc failed for Lock Consumables patch.");
+        g_lockConsumablesInstallFailed = true;
         return false;
     }
 
@@ -2618,8 +2637,11 @@ bool InstallLockConsumablesPatch() {
 
     if (!WriteJump(patchAddress, g_lockConsumablesCave, sizeof(kOriginalLockConsumablesBytes))) {
         Log("Refusing Lock Consumables patch: failed to write hook at 0x011A1F6D.");
+        g_lockConsumablesInstallFailed = true;
         return false;
     }
+    g_lockConsumablesPatchReady = true;
+    g_lockConsumablesInstallFailed = false;
     Log("Installed Lock Consumables hook at 0x011A1F6D.");
     return true;
 }
@@ -3213,7 +3235,6 @@ bool InstallPatches() {
     g_missionTimerPatchReady = InstallMissionTimerPatch();
     g_missionTimer2PatchReady = InstallMissionTimer2Patch();
     g_missionTimersPatchReady = g_missionTimerPatchReady || g_missionTimer2PatchReady;
-    g_lockConsumablesPatchReady = InstallLockConsumablesPatch();
     g_inventoryPointerPatchReady = InstallInventoryPointerPatch();
     g_noclipPatchReady = InstallNoclipUpdatePatch();
 
@@ -3241,9 +3262,6 @@ bool InstallPatches() {
     if (!g_noReloadPatchReady) {
         g_noReload = false;
     }
-    if (!g_lockConsumablesPatchReady) {
-        g_lockConsumables = false;
-    }
     if (!g_missionTimersPatchReady) {
         g_freezeMissionTimer = false;
     }
@@ -3260,7 +3278,6 @@ bool InstallPatches() {
         !g_stealthModePatchReady &&
         !g_noReloadPatchReady &&
         !g_missionTimersPatchReady &&
-        !g_lockConsumablesPatchReady &&
         !g_inventoryPointerPatchReady &&
         !g_noclipPatchReady) {
         Log("No gameplay patches installed; UI will load with features unavailable.");
@@ -3750,18 +3767,22 @@ void DrawMenu() {
                 }
 
                 ImGui::NextColumn();
-                if (g_lockConsumablesPatchReady) {
-                    if (ImGui::Checkbox("Lock Consumables (incl Ship Ammo)", &g_lockConsumables)) {
-                        Log(g_lockConsumables ? "Lock Consumables enabled." :
-                                                "Lock Consumables disabled.");
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Prevents the shared consumable decrement from lowering values while enabled.\n"
-                            "Best used after your save is fully loaded.");
-                    }
-                } else {
-                    ImGui::TextDisabled("Lock Consumables unavailable");
+                bool lockConsumables = g_lockConsumables;
+                if (ImGui::Checkbox("Lock Consumables (incl Ship Ammo)", &lockConsumables)) {
+                    g_lockConsumables = lockConsumables;
+                    AfterLockConsumablesToggle();
+                    Log(g_lockConsumables ? "Lock Consumables enabled." :
+                                            "Lock Consumables disabled.");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Prevents the shared consumable decrement from lowering values while enabled.\n"
+                        "Installs its hook only when enabled. Best used after your save is fully loaded.");
+                }
+                if (g_lockConsumablesInstallFailed) {
+                    ImGui::TextDisabled("Lock Consumables unavailable: hook install failed.");
+                } else if (!g_lockConsumablesPatchReady) {
+                    ImGui::TextDisabled("Lock Consumables hook will install when enabled.");
                 }
 
                 ImGui::Spacing();
@@ -3806,9 +3827,6 @@ void DrawMenu() {
                 }
 
                 ImGui::Columns(1);
-                if (!g_lockConsumablesPatchReady) {
-                    ImGui::TextDisabled("Consumable lock unavailable: hook was not installed.");
-                }
             }
             ImGui::EndTabItem();
         }
