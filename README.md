@@ -2,9 +2,9 @@
 
 AC4Tools is a standalone ASI plugin for **Assassin's Creed IV Black Flag**.
 
-It adds an in-game ImGui menu with ship, player, inventory/resources, unlocks, noclip, time scale, input/system, and hotkey options. The plugin is intended to be loaded through Ultimate ASI Loader.
+It adds an in-game ImGui menu with ship, player, consumable lock, one-time inventory refills, unlocks, Freedom Cry helpers, noclip, time scale, input/system, and hotkey options. The plugin is intended to be loaded through Ultimate ASI Loader.
 
-Current version: **v1.01**
+Current version: **v1.02**
 
 ## Game Version
 
@@ -24,10 +24,6 @@ Other game builds may use different code addresses or bytes. If a supported patc
 ### Ship
 
 - Ship Godmode
-- Infinite Ship Crew: keeps ship crew at `40`
-- Infinite Mortar Shot Ammo: keeps mortar shot ammo at `15`
-- Infinite Heavy Shot Ammo: keeps heavy shot ammo at `25`
-- Infinite Fire Barrels: keeps fire barrels at `25`
 - Ally Godmode: protects all allies, not just allied ships
 - No Cannon Cooldown
 
@@ -37,23 +33,22 @@ Other game builds may use different code addresses or bytes. If a supported patc
 - Infinite Breath
 - Stealth Mode
 - No Reload
+- Lock Consumables (incl Ship Ammo): prevents the shared consumable decrement from lowering values while enabled. This covers player consumables and ship ammunition through one shared hook. Enable it after the save is fully loaded.
+- One-time Inventory Refill: choose one resource/ammo type from a dropdown and refill it once to its preset value
 - Freeze Mission Timer
 
-### Money and Inventory
+### One-Time Refill Presets
 
-- Infinite Money: refills to `999999`
-- Infinite Sugar: refills to `2500`
-- Infinite Rum: refills to `2500`
-- Infinite Wood: refills to `2500`
-- Infinite Cloth: refills to `2500`
-- Infinite Metal: refills to `2500`
-- Infinite Bullets: refills to `30`
-- Infinite Smokebombs: refills to `15`
-- Infinite Sleep Darts: refills to `15`
-- Infinite Berserk Darts: refills to `15`
-- Infinite Rope Darts: refills to `15`
-- Infinite Throwing Knives: refills to `1`
-- Infinite Harpoons: refills to `40`
+- Money: `999999`
+- Ship Crew: `40`
+- Mortar Shot Ammo: `15`
+- Heavy Shot Ammo: `25`
+- Fire Barrels: `25`
+- Sugar, Rum, Wood, Cloth, Metal: `2500`
+- Bullets: `30`
+- Smoke Bombs, Sleep Darts, Berserk Darts, Rope Darts, Firecrackers, Blunderbuss: `15`
+- Throwing Knives: `1`
+- Harpoons: `40`
 
 ### Unlocks
 
@@ -63,30 +58,45 @@ Back up your save before using Unlocks. Saved unlock changes may be irreversible
 
 Unlocks can irreversibly softlock your save if an unlocked item was supposed to be granted later by a mission, contract, challenge, or other progression event.
 
-- Global Hidden Unlocks: install from the main menu before loading a save; stays active until restart
+- Global Hidden Unlocks: broad all-at-once alternative to the targeted unlock checkboxes. Install from the main menu before loading a save; it can unlock additional hidden rewards beyond the individually selectable list and stays active until restart.
 - Finish Community Challenges if needed for certain unlocks: optional community-completion handling for entries marked `(CC)`
-- Pistols: Golden Flintlock Pistols, Captain's Wheellock Pistols `(CC)`, Precision Shooter
-- Swords: Pistol Swords, Scottish Broadsword, Persian Scimitars `(CC)`, Crude Iron Machete, Mayan Machete
+- Pistols: Golden Flintlock Pistols, Captain's Wheellock Pistols `(CC)`, Precision Shooter `(Freedom Cry)`
+- Swords: Pistol Swords, Scottish Broadsword, Persian Scimitars `(CC)`, Crude Iron Machete `(Freedom Cry)`, Mayan Machete `(Freedom Cry)`
 - Outfits: Governor Outfit, Templar Outfit, Stealth Outfit, Explorer Outfit `(CC)`
-- Ship Cosmetics: Gilded Sails, The Ranger Figurehead & Queen Anne's Revenge Wheel, Aquila Figurehead, plus selected `(CC)` sails/figureheads/wheels
-- Elite Unlocks: elite Jackdaw upgrades marked `(CC)`
+- Ship Cosmetics: Gilded Sails, The Ranger Figurehead & Queen Anne's Revenge Wheel, Aquila Figurehead, El Impoluto Figurehead `(CC)`, El Impoluto Wheel `(CC)`, Black and Red Sails `(CC)`, Queen Anne Figurehead `(CC)`, Blackwood Wheel `(CC)`, Aquila Wheel `(CC)`, Flower Sails `(CC)`, Grey Sails `(CC)`
+- Elite Unlocks: Elite Hull `(CC)`, Elite Set of Cannons `(CC)`, Elite Ram `(CC)`, Elite Round Shot `(CC)`, Elite Mortars `(CC)`, Elite Swivel Guns `(CC)`, Elite Heavy Shot `(CC)`, Elite Fire Barrel `(CC)`, Elite Heavy Shot Storage `(CC)`, Elite Mortar Storage `(CC)`, Elite Fire Barrel Storage `(CC)`, Elite Harpoon `(CC)`
+
+### Freedom Cry
+
+- Add `100` Liberated Slaves to the Freedom Cry resistance counter
+- Add `100` Recruited Maroons to the Freedom Cry resistance counter
+- Use these while loaded into Freedom Cry
 
 ### Tools
 
 - Noclip with configurable speed and boost speed
 - Time Scale with configurable value
+- Free Cam with separate movement, vertical movement, and mouse-look speed controls
 - Optional mouse lock to keep the Windows cursor inside the game window
 - Optional mouse input blocking while the AC4Tools UI is open
 - Optional keyboard input blocking while the AC4Tools UI is open
 - Optional AC4Tools hotkey blocking while the AC4Tools UI is open
 - Saved menu window position and size after dragging/resizing
-- Configurable hotkeys for the menu and toggleable features
+- Configurable hotkeys for the menu, toggleable features, and Free Cam controls
 - In-game UI opened with the configured menu hotkey, `B` by default
 - Optional console and file logging for patch status and diagnostics
 
 ## Notes
 
-`Ship Godmode`, `Infinite Ship Crew`, `Infinite Mortar Shot Ammo`, `Infinite Heavy Shot Ammo`, and `Infinite Fire Barrels` may need you to leave the wheel and take control of the ship again before they start applying.
+`Lock Consumables (incl Ship Ammo)` should be enabled after the save is fully loaded. It does not refill values upward; it prevents the shared consume/decrement function from lowering supported consumables while enabled.
+
+`Free Cam` installs its camera hooks only when enabled from the Game tab or its assigned hotkey. Use the mouse to aim. Default controls are `Num8`/`Num2` for forward/back, `Num4`/`Num6` to strafe, `Num7`/`Num9` to move up/down, hold `Shift` to speed up, and press `F10` to exit. Movement, boost, and exit keys can be changed in the Hotkeys tab under `Free Cam Control Hotkeys`. `Free Cam Look Speed` scales mouse-look sensitivity while Free Cam is enabled.
+
+If the `One-time Inventory Refill` button is disabled, load a save and open an inventory or ship menu first.
+
+If the `Freedom Cry` buttons are disabled, load Freedom Cry and open an inventory or ship menu first.
+
+Freedom Cry-specific refill dropdown entries include Firecrackers and Blunderbuss.
 
 `Ally Godmode` affects all allies, not just allied ships, even though it is grouped under the Ship tab in the UI.
 
@@ -170,6 +180,9 @@ WindowSizeY = 420
 
 [Game]
 TimeScale = 0.010000
+FreeCamSpeed = 1.000000
+FreeCamVerticalSpeed = 1.000000
+FreeCamLookSpeed = 1.000000
 
 [Noclip]
 Speed = 1.000000
@@ -180,30 +193,25 @@ MenuOpen = 66
 ShipGodmode = 0
 NoCannonCooldown = 0
 AllyGodmode = 0
-InfiniteShipCrew = 0
-InfiniteMortarShotAmmo = 0
-InfiniteHeavyShotAmmo = 0
-InfiniteFireBarrels = 0
 PlayerGodmode = 0
 InfiniteBreath = 0
 StealthMode = 0
 NoReload = 0
+LockConsumables = 0
 FreezeMissionTimer = 0
-InfiniteMoney = 0
-InfiniteSugar = 0
-InfiniteRum = 0
-InfiniteBullets = 0
-InfiniteRopeDarts = 0
-InfiniteWood = 0
-InfiniteSleepDarts = 0
-InfiniteThrowingKnives = 0
-InfiniteMetal = 0
-InfiniteSmokebombs = 0
-InfiniteBerserkDarts = 0
-InfiniteHarpoons = 0
-InfiniteCloth = 0
 Noclip = 0
 TimeScale = 0
+FreeCam = 0
+
+[FreeCamControls]
+MoveForward = 104
+MoveBackward = 98
+StrafeLeft = 100
+StrafeRight = 102
+MoveUp = 103
+MoveDown = 105
+Boost = 16
+Exit = 121
 ```
 
 `EnableConsole = 1` opens a console window. `EnableFile = 1` writes timestamped lines to `AC4Tools.log` next to `AC4BFSP.exe`. Both are off by default.
@@ -214,7 +222,7 @@ TimeScale = 0
 
 `WindowPosX`, `WindowPosY`, `WindowSizeX`, and `WindowSizeY` store the last menu position and size after you finish dragging or resizing the window.
 
-Hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Use the in-game Hotkeys tab to set them instead of editing by hand.
+Hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Free Cam control defaults are numpad movement, `Boost = 16` for `Shift`, and `Exit = 121` for `F10`. Use the in-game Hotkeys tab to set them instead of editing by hand.
 
 ## Third-Party Components
 

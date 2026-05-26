@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdarg>
+#include <cmath>
 
 #include "MinHook.h"
 #include "imgui.h"
@@ -29,8 +30,8 @@ extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wparam
 namespace {
 
 constexpr const char* kToolName = "AC4Tools";
-constexpr const char* kToolVersion = "v1.01";
-constexpr const char* kToolTitle = "AC4Tools v1.01";
+constexpr const char* kToolVersion = "v1.02";
+constexpr const char* kToolTitle = "AC4Tools v1.02";
 constexpr const char* kSupportedGameExe = "AC4BFSP.exe";
 constexpr const char* kSupportedGameSize = "45,056,040 bytes";
 constexpr const char* kSupportedGameTimestamp = "2023-11-14 14:41:36";
@@ -80,6 +81,12 @@ constexpr std::uint8_t kOriginalNoReloadBytes[] = {
     0x8B, 0x50, 0x10, 0x8B, 0x48, 0x08,
 };
 
+constexpr std::uintptr_t kPatchLockConsumablesAddress = 0x011A1F6D;
+constexpr std::uintptr_t kPatchLockConsumablesReturnAddress = 0x011A1F72;
+constexpr std::uint8_t kOriginalLockConsumablesBytes[] = {
+    0x2B, 0xC2, 0x89, 0x41, 0x0C,
+};
+
 constexpr std::uintptr_t kPatchMissionTimerAddress = 0x019446C3;
 constexpr std::uintptr_t kPatchMissionTimerReturnAddress = 0x019446CB;
 constexpr std::uint8_t kOriginalMissionTimerBytes[] = {
@@ -98,28 +105,29 @@ constexpr std::uint8_t kOriginalInventoryPointerBytes[] = {
     0x8B, 0x82, 0xE8, 0x00, 0x00, 0x00,
 };
 
-constexpr std::uintptr_t kPatchInventorySetAddress = 0x011A1F3D;
-constexpr std::uintptr_t kPatchInventorySetReturnAddress = 0x011A1F42;
-constexpr std::uint8_t kOriginalInventorySetBytes[] = {
-    0x89, 0x4E, 0x0C, 0x5E, 0x5D,
-};
-
-constexpr std::uintptr_t kPatchInventorySetAltAddress = 0x011A1F6F;
-constexpr std::uintptr_t kPatchInventorySetAltReturnAddress = 0x011A1F74;
-constexpr std::uint8_t kOriginalInventorySetAltBytes[] = {
-    0x89, 0x41, 0x0C, 0xB0, 0x01,
-};
-
-constexpr std::uintptr_t kPatchInventoryEntrySubtractAddress = 0x011A1FA3;
-constexpr std::uintptr_t kPatchInventoryEntrySubtractReturnAddress = 0x011A1FA8;
-constexpr std::uint8_t kOriginalInventoryEntrySubtractBytes[] = {
-    0x89, 0x46, 0x0C, 0xB0, 0x01,
-};
-
 constexpr std::uintptr_t kPatchNoclipUpdateAddress = 0x016FAACD;
 constexpr std::uintptr_t kPatchNoclipUpdateReturnAddress = 0x016FAAD3;
 constexpr std::uint8_t kOriginalNoclipUpdateBytes[] = {
     0x8B, 0x8E, 0x08, 0x01, 0x00, 0x00,
+};
+
+constexpr std::uint8_t kFreeCamRootPattern[] = {
+    0x8B, 0x50, 0x4C, 0x56, 0x8B, 0xCF, 0xFF, 0xD2, 0x8B, 0x0D,
+};
+constexpr std::uint8_t kFreeCamTransformPattern[] = {
+    0x0F, 0x29, 0x46, 0x10, 0x0F, 0x28, 0x47, 0x20,
+    0x0F, 0x29, 0x46, 0x20, 0xD9, 0x87, 0xC8,
+};
+constexpr std::uint8_t kOriginalFreeCamTransformBytes[] = {
+    0x0F, 0x29, 0x46, 0x10, 0x0F, 0x28, 0x47, 0x20,
+};
+constexpr std::uint8_t kFreeCamCameraPattern[] = {
+    0x07, 0x0F, 0x29, 0x46, 0x40, 0x0F, 0x28, 0x47,
+    0x10, 0x0F, 0x29, 0x46, 0x50,
+};
+constexpr std::size_t kFreeCamCameraPatchOffset = 5;
+constexpr std::uint8_t kOriginalFreeCamCameraBytes[] = {
+    0x0F, 0x28, 0x47, 0x10, 0x0F, 0x29, 0x46, 0x50,
 };
 
 constexpr std::uint8_t kGlobalHiddenUnlockWrite1Pattern[] = {
@@ -151,29 +159,23 @@ bool g_playerGodmode = false;
 bool g_infiniteBreath = false;
 bool g_stealthMode = false;
 bool g_noReload = false;
+bool g_lockConsumables = false;
 bool g_freezeMissionTimer = false;
-bool g_infiniteMoney = false;
-bool g_infiniteShipCrew = false;
-bool g_infiniteMortarShotAmmo = false;
-bool g_infiniteHeavyShotAmmo = false;
-bool g_infiniteFireBarrels = false;
-bool g_infiniteSugar = false;
-bool g_infiniteRum = false;
-bool g_infiniteWood = false;
-bool g_infiniteMetal = false;
-bool g_infiniteCloth = false;
-bool g_infiniteSmokeBombs = false;
-bool g_infiniteBullets = false;
-bool g_infiniteSleepDarts = false;
-bool g_infiniteBerserkDarts = false;
-bool g_infiniteRopeDarts = false;
-bool g_infiniteHarpoons = false;
-bool g_infiniteThrowingKnives = false;
 bool g_timeScaleEnabled = false;
+bool g_freeCamEnabled = false;
+bool g_freeCamHooksInstalled = false;
+bool g_freeCamInstallFailed = false;
+bool g_freeCamActive = false;
 bool g_globalHiddenUnlockInstalled = false;
 bool g_finishCommunityChallengesForUnlocks = false;
 float g_timeScale = 0.01f;
 int g_timeScaleInterval = 10000;
+float g_freeCamX = 0.0f;
+float g_freeCamY = 0.0f;
+float g_freeCamZ = 0.0f;
+float g_freeCamSpeed = 1.0f;
+float g_freeCamVerticalSpeed = 1.0f;
+float g_freeCamLookSpeed = 1.0f;
 bool g_noclipEnabled = false;
 bool g_noclipActive = false;
 float g_noclipSpeed = 1.0f;
@@ -189,44 +191,47 @@ volatile LONG g_timeIntervalHits = 0;
 volatile LONG g_playerHealthHits = 0;
 volatile LONG g_infiniteBreathHits = 0;
 volatile LONG g_noReloadHits = 0;
-volatile LONG g_inventorySetHits = 0;
-volatile LONG g_inventorySetAltHits = 0;
-volatile LONG g_inventoryEntrySubtractHits = 0;
+volatile LONG g_lockConsumablesHits = 0;
 volatile LONG g_inventoryPointerHits = 0;
 volatile LONG g_missionTimerHits = 0;
 volatile LONG g_missionTimer2Hits = 0;
 volatile LONG g_noclipUpdateHits = 0;
+volatile LONG g_freeCamTransformHits = 0;
+volatile LONG g_freeCamCameraHits = 0;
 std::uint8_t* g_cave = nullptr;
 std::uint8_t* g_allyGodmodeCave = nullptr;
 std::uint8_t* g_timeIntervalCave = nullptr;
 std::uint8_t* g_playerHealthCave = nullptr;
 std::uint8_t* g_infiniteBreathCave = nullptr;
 std::uint8_t* g_noReloadCave = nullptr;
+std::uint8_t* g_lockConsumablesCave = nullptr;
 std::uint8_t* g_inventoryPointerCave = nullptr;
 std::uint8_t* g_missionTimerCave = nullptr;
 std::uint8_t* g_missionTimer2Cave = nullptr;
-std::uint8_t* g_inventorySetCave = nullptr;
-std::uint8_t* g_inventorySetAltCave = nullptr;
-std::uint8_t* g_inventoryEntrySubtractCave = nullptr;
 std::uint8_t* g_noclipUpdateCave = nullptr;
+std::uint8_t* g_freeCamTransformCave = nullptr;
+std::uint8_t* g_freeCamCameraCave = nullptr;
+std::uint8_t* g_freeCamTransformAddress = nullptr;
+std::uint8_t* g_freeCamCameraAddress = nullptr;
+std::uintptr_t g_freeCamRootStaticAddress = 0;
 std::uint8_t* g_globalHiddenUnlockWrite1Address = nullptr;
 std::uint8_t* g_globalHiddenUnlockWrite2Address = nullptr;
 std::uint8_t* g_globalHiddenUnlockVisibilityAddress = nullptr;
 std::uint8_t* g_globalHiddenUnlockCave = nullptr;
 std::uint8_t* g_communityChallengeStorage = nullptr;
 std::uint8_t* g_communityChallengeNext = nullptr;
-int g_inventoryItemId = 0;
-int g_inventoryValue = 0;
-int g_inventoryLastItemId = 0;
-int g_inventoryLastOriginalValue = 0;
-int g_inventoryLastAppliedValue = 0;
 std::uintptr_t g_inventoryBase = 0;
 std::uintptr_t g_bhvAssassin = 0;
 std::uintptr_t g_playerEntity = 0;
+std::uintptr_t g_freeCamTransform = 0;
+std::uintptr_t g_freeCamCamera = 0;
 int g_inventoryPointerLastWrites = 0;
-int g_unlockPistolsFound = 0;
-int g_unlockPistolsPatched = 0;
-DWORD g_unlockPistolsLastScan = 0;
+int g_inventoryRefillSelected = 0;
+int g_inventoryRefillLastResult = 0;
+int g_freedomCryLastResult = 0;
+int g_unlockRecordsFound = 0;
+int g_unlockRecordsPatched = 0;
+DWORD g_unlockLastScan = 0;
 volatile LONG g_unlockScanRequested = 0;
 volatile LONG g_unlockScanRunning = 0;
 int g_missionTimerDiffer = 0;
@@ -239,16 +244,15 @@ bool g_playerHealthPatchReady = false;
 bool g_infiniteBreathPatchReady = false;
 bool g_stealthModePatchReady = false;
 bool g_noReloadPatchReady = false;
+bool g_lockConsumablesPatchReady = false;
 bool g_missionTimerPatchReady = false;
 bool g_missionTimer2PatchReady = false;
 bool g_missionTimersPatchReady = false;
-bool g_inventoryPatchReady = false;
 bool g_inventoryPointerPatchReady = false;
-bool g_inventorySetPatchReady = false;
-bool g_inventorySetAltPatchReady = false;
-bool g_inventoryEntrySubtractPatchReady = false;
 bool g_noclipPatchReady = false;
+bool g_freeCamHotkeyReady = true;
 constexpr int kMenuHotkeyCapture = -2;
+constexpr int kFreeCamControlCaptureBase = -100;
 int g_menuHotkey = 'B';
 int g_hotkeyCaptureAction = -1;
 int g_suppressedHotkeyVk = 0;
@@ -297,6 +301,8 @@ GetKeyboardStateFn g_originalGetKeyboardState = nullptr;
 void InitConsole();
 void __stdcall UpdateNoclipState();
 void UpdateTimeScaleInterval();
+void UpdateFreeCam();
+bool InstallFreeCamPatch();
 void ApplyNoCannonCooldownPatch();
 void ApplyStealthModePatch();
 
@@ -317,6 +323,18 @@ void AfterTimeScaleToggle() {
     UpdateTimeScaleInterval();
 }
 
+void AfterFreeCamToggle() {
+    g_freeCamActive = false;
+    if (!g_freeCamEnabled) {
+        return;
+    }
+    if (!g_freeCamHooksInstalled && !InstallFreeCamPatch()) {
+        g_freeCamEnabled = false;
+        g_freeCamActive = false;
+        return;
+    }
+}
+
 void AfterNoCannonCooldownToggle() {
     ApplyNoCannonCooldownPatch();
 }
@@ -329,33 +347,76 @@ ToggleAction g_actions[] = {
     {"ShipGodmode", "Ship Godmode", &g_enabled, &g_shipPatchReady, 0, nullptr},
     {"NoCannonCooldown", "No Cannon Cooldown", &g_noCannonCooldown, &g_noCannonCooldownPatchReady, 0, &AfterNoCannonCooldownToggle},
     {"AllyGodmode", "Ally Godmode", &g_allyGodmode, &g_allyGodmodePatchReady, 0, nullptr},
-    {"InfiniteShipCrew", "Infinite Ship Crew", &g_infiniteShipCrew, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteMortarShotAmmo", "Infinite Mortar Shot Ammo", &g_infiniteMortarShotAmmo, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteHeavyShotAmmo", "Infinite Heavy Shot Ammo", &g_infiniteHeavyShotAmmo, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteFireBarrels", "Infinite Fire Barrels", &g_infiniteFireBarrels, &g_inventoryPatchReady, 0, nullptr},
     {"PlayerGodmode", "Player Godmode", &g_playerGodmode, &g_playerHealthPatchReady, 0, nullptr},
     {"InfiniteBreath", "Infinite Breath", &g_infiniteBreath, &g_infiniteBreathPatchReady, 0, nullptr},
     {"StealthMode", "Stealth Mode", &g_stealthMode, &g_stealthModePatchReady, 0, &AfterStealthModeToggle},
     {"NoReload", "No Reload", &g_noReload, &g_noReloadPatchReady, 0, nullptr},
+    {"LockConsumables", "Lock Consumables", &g_lockConsumables, &g_lockConsumablesPatchReady, 0, nullptr},
     {"FreezeMissionTimer", "Freeze Mission Timer", &g_freezeMissionTimer, &g_missionTimersPatchReady, 0, nullptr},
-    {"InfiniteMoney", "Infinite Money", &g_infiniteMoney, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteSugar", "Infinite Sugar", &g_infiniteSugar, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteRum", "Infinite Rum", &g_infiniteRum, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteBullets", "Infinite Bullets", &g_infiniteBullets, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteRopeDarts", "Infinite Rope Darts", &g_infiniteRopeDarts, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteWood", "Infinite Wood", &g_infiniteWood, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteSleepDarts", "Infinite Sleep Darts", &g_infiniteSleepDarts, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteThrowingKnives", "Infinite Throwing Knives", &g_infiniteThrowingKnives, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteMetal", "Infinite Metal", &g_infiniteMetal, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteSmokebombs", "Infinite Smokebombs", &g_infiniteSmokeBombs, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteBerserkDarts", "Infinite Berserk Darts", &g_infiniteBerserkDarts, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteHarpoons", "Infinite Harpoons", &g_infiniteHarpoons, &g_inventoryPatchReady, 0, nullptr},
-    {"InfiniteCloth", "Infinite Cloth", &g_infiniteCloth, &g_inventoryPatchReady, 0, nullptr},
     {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, &AfterNoclipToggle},
     {"TimeScale", "Time Scale", &g_timeScaleEnabled, &g_timeScalePatchReady, 0, &AfterTimeScaleToggle},
+    {"FreeCam", "Free Cam", &g_freeCamEnabled, &g_freeCamHotkeyReady, 0, &AfterFreeCamToggle},
 };
 
 constexpr int kActionCount = sizeof(g_actions) / sizeof(g_actions[0]);
+
+struct FreeCamControlBinding {
+    const char* id;
+    const char* label;
+    int key;
+    int defaultKey;
+};
+
+FreeCamControlBinding g_freeCamControls[] = {
+    {"MoveForward", "Move Forward", VK_NUMPAD8, VK_NUMPAD8},
+    {"MoveBackward", "Move Backward", VK_NUMPAD2, VK_NUMPAD2},
+    {"StrafeLeft", "Strafe Left", VK_NUMPAD4, VK_NUMPAD4},
+    {"StrafeRight", "Strafe Right", VK_NUMPAD6, VK_NUMPAD6},
+    {"MoveUp", "Move Up", VK_NUMPAD7, VK_NUMPAD7},
+    {"MoveDown", "Move Down", VK_NUMPAD9, VK_NUMPAD9},
+    {"Boost", "Boost", VK_SHIFT, VK_SHIFT},
+    {"Exit", "Exit Free Cam", VK_F10, VK_F10},
+};
+
+constexpr int kFreeCamControlCount = sizeof(g_freeCamControls) / sizeof(g_freeCamControls[0]);
+constexpr int kFreeCamMoveForward = 0;
+constexpr int kFreeCamMoveBackward = 1;
+constexpr int kFreeCamStrafeLeft = 2;
+constexpr int kFreeCamStrafeRight = 3;
+constexpr int kFreeCamMoveUp = 4;
+constexpr int kFreeCamMoveDown = 5;
+constexpr int kFreeCamBoost = 6;
+constexpr int kFreeCamExit = 7;
+
+struct InventoryRefillEntry {
+    const char* name;
+    std::uintptr_t offset;
+    int value;
+};
+
+InventoryRefillEntry g_inventoryRefillEntries[] = {
+    {"Money", 0x00, 999999},
+    {"Ship Crew", 0x80, 40},
+    {"Mortar Shot Ammo", 0x84, 15},
+    {"Heavy Shot Ammo", 0x88, 25},
+    {"Fire Barrels", 0x8C, 25},
+    {"Sugar", 0x9C, 2500},
+    {"Rum", 0x98, 2500},
+    {"Wood", 0xA0, 2500},
+    {"Cloth", 0x90, 2500},
+    {"Metal", 0x94, 2500},
+    {"Bullets", 0x40, 30},
+    {"Smoke Bombs", 0x04, 15},
+    {"Sleep Darts", 0x78, 15},
+    {"Berserk Darts", 0x7C, 15},
+    {"Rope Darts", 0x54, 15},
+    {"Firecrackers", 0xBC, 15},
+    {"Blunderbuss", 0xDC, 15},
+    {"Throwing Knives", 0xAC, 1},
+    {"Harpoons", 0xA4, 40},
+};
+
+constexpr int kInventoryRefillEntryCount = sizeof(g_inventoryRefillEntries) / sizeof(g_inventoryRefillEntries[0]);
 
 void SetGameInputCaptured(bool captured) {
     if (g_inputCaptured == captured) {
@@ -580,6 +641,11 @@ const char* HotkeyName(int vk) {
         case VK_SHIFT: strcpy_s(out, 32, "Shift"); return out;
         case VK_CONTROL: strcpy_s(out, 32, "Ctrl"); return out;
         case VK_MENU: strcpy_s(out, 32, "Alt"); return out;
+        case VK_NUMPAD0: case VK_NUMPAD1: case VK_NUMPAD2: case VK_NUMPAD3:
+        case VK_NUMPAD4: case VK_NUMPAD5: case VK_NUMPAD6: case VK_NUMPAD7:
+        case VK_NUMPAD8: case VK_NUMPAD9:
+            sprintf_s(out, 32, "Num%d", vk - VK_NUMPAD0);
+            return out;
         case VK_F1: case VK_F2: case VK_F3: case VK_F4:
         case VK_F5: case VK_F6: case VK_F7: case VK_F8:
         case VK_F9: case VK_F10: case VK_F11: case VK_F12:
@@ -626,6 +692,12 @@ void SaveConfig() {
     WritePrivateProfileStringA("UI", "WindowSizeY", value, path);
     sprintf_s(value, "%.6f", g_timeScale);
     WritePrivateProfileStringA("Game", "TimeScale", value, path);
+    sprintf_s(value, "%.6f", g_freeCamSpeed);
+    WritePrivateProfileStringA("Game", "FreeCamSpeed", value, path);
+    sprintf_s(value, "%.6f", g_freeCamVerticalSpeed);
+    WritePrivateProfileStringA("Game", "FreeCamVerticalSpeed", value, path);
+    sprintf_s(value, "%.6f", g_freeCamLookSpeed);
+    WritePrivateProfileStringA("Game", "FreeCamLookSpeed", value, path);
     sprintf_s(value, "%.6f", g_noclipSpeed);
     WritePrivateProfileStringA("Noclip", "Speed", value, path);
     sprintf_s(value, "%.6f", g_noclipBoostSpeed);
@@ -635,6 +707,10 @@ void SaveConfig() {
     for (int i = 0; i < kActionCount; ++i) {
         sprintf_s(value, "%d", g_actions[i].hotkey);
         WritePrivateProfileStringA("Hotkeys", g_actions[i].id, value, path);
+    }
+    for (int i = 0; i < kFreeCamControlCount; ++i) {
+        sprintf_s(value, "%d", g_freeCamControls[i].key);
+        WritePrivateProfileStringA("FreeCamControls", g_freeCamControls[i].id, value, path);
     }
 }
 
@@ -850,40 +926,6 @@ void InitGameInfo() {
     }
 }
 
-void __stdcall ApplyInventoryValue() {
-    const int itemId = g_inventoryItemId;
-    g_inventoryLastItemId = itemId;
-    g_inventoryLastOriginalValue = g_inventoryValue;
-    if (g_infiniteMoney && itemId == 1) {
-        g_inventoryValue = 999999;
-    } else if (g_infiniteSugar && itemId == 0x10) {
-        g_inventoryValue = 2500;
-    } else if (g_infiniteRum && itemId == 0x11) {
-        g_inventoryValue = 2500;
-    } else if (g_infiniteCloth && itemId == 0x12) {
-        g_inventoryValue = 2500;
-    } else if (g_infiniteWood && itemId == 0x13) {
-        g_inventoryValue = 2500;
-    } else if (g_infiniteMetal && itemId == 0x14) {
-        g_inventoryValue = 2500;
-    } else if (g_infiniteSmokeBombs && itemId == 5) {
-        g_inventoryValue = 15;
-    } else if (g_infiniteBullets && itemId == 0x0B) {
-        g_inventoryValue = 30;
-    } else if (g_infiniteSleepDarts && itemId == 0x23) {
-        g_inventoryValue = 15;
-    } else if (g_infiniteBerserkDarts && itemId == 0x24) {
-        g_inventoryValue = 15;
-    } else if (g_infiniteRopeDarts && itemId == 0x20) {
-        g_inventoryValue = 15;
-    } else if (g_infiniteHarpoons && itemId == 0x41) {
-        g_inventoryValue = 40;
-    } else if (g_infiniteThrowingKnives && itemId == 8) {
-        g_inventoryValue = 1;
-    }
-    g_inventoryLastAppliedValue = g_inventoryValue;
-}
-
 bool WriteInventoryValueByOffset(std::uintptr_t itemOffset, int value) {
     if (!g_inventoryBase) {
         return false;
@@ -912,65 +954,53 @@ bool WriteInventoryValueByOffset(std::uintptr_t itemOffset, int value) {
     }
 }
 
-void MaintainInventoryPointerValues() {
-    bool touched = false;
-    if (g_infiniteShipCrew) {
-        touched |= WriteInventoryValueByOffset(0x80, 40);
-    }
-    if (g_infiniteMortarShotAmmo) {
-        touched |= WriteInventoryValueByOffset(0x84, 15);
-    }
-    if (g_infiniteHeavyShotAmmo) {
-        touched |= WriteInventoryValueByOffset(0x88, 25);
-    }
-    if (g_infiniteFireBarrels) {
-        touched |= WriteInventoryValueByOffset(0x8C, 25);
-    }
-    if (g_infiniteMoney) {
-        touched |= WriteInventoryValueByOffset(0x00, 999999);
-    }
-    if (g_infiniteSmokeBombs) {
-        touched |= WriteInventoryValueByOffset(0x04, 15);
-    }
-    if (g_infiniteBullets) {
-        touched |= WriteInventoryValueByOffset(0x40, 30);
-    }
-    if (g_infiniteRopeDarts) {
-        touched |= WriteInventoryValueByOffset(0x54, 15);
-    }
-    if (g_infiniteSleepDarts) {
-        touched |= WriteInventoryValueByOffset(0x78, 15);
-    }
-    if (g_infiniteBerserkDarts) {
-        touched |= WriteInventoryValueByOffset(0x7C, 15);
-    }
-    if (g_infiniteHarpoons) {
-        touched |= WriteInventoryValueByOffset(0xA4, 40);
-    }
-    if (g_infiniteThrowingKnives) {
-        touched |= WriteInventoryValueByOffset(0xAC, 1);
-    }
-    if (g_infiniteCloth) {
-        touched |= WriteInventoryValueByOffset(0x90, 2500);
-    }
-    if (g_infiniteMetal) {
-        touched |= WriteInventoryValueByOffset(0x94, 2500);
-    }
-    if (g_infiniteRum) {
-        touched |= WriteInventoryValueByOffset(0x98, 2500);
-    }
-    if (g_infiniteSugar) {
-        touched |= WriteInventoryValueByOffset(0x9C, 2500);
-    }
-    if (g_infiniteWood) {
-        touched |= WriteInventoryValueByOffset(0xA0, 2500);
+bool AddInventoryValueByOffset(std::uintptr_t itemOffset, int delta, const char* label) {
+    if (!g_inventoryBase) {
+        return false;
     }
 
-    if (touched) {
-        g_inventoryLastItemId = 0xFF;
-        g_inventoryLastOriginalValue = g_inventoryPointerLastWrites;
-        g_inventoryLastAppliedValue = 2500;
+    __try {
+        auto* inventory = reinterpret_cast<std::uint8_t*>(g_inventoryBase);
+        auto* itemTable = *reinterpret_cast<std::uint8_t**>(inventory + 0x0C);
+        if (!itemTable) {
+            return false;
+        }
+
+        auto* item = *reinterpret_cast<std::uint8_t**>(itemTable + itemOffset);
+        if (!item) {
+            return false;
+        }
+
+        auto* amount = reinterpret_cast<int*>(item + 0x0C);
+        const int oldValue = *amount;
+        int newValue = oldValue + delta;
+        if (newValue < oldValue) {
+            newValue = 0x7fffffff;
+        }
+        *amount = newValue;
+        ++g_inventoryPointerLastWrites;
+        Logf("Added %d %s via inventory pointer: %d -> %d.", delta, label, oldValue, newValue);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
     }
+}
+
+bool RefillSelectedInventoryEntry() {
+    if (g_inventoryRefillSelected < 0 || g_inventoryRefillSelected >= kInventoryRefillEntryCount) {
+        g_inventoryRefillLastResult = -1;
+        return false;
+    }
+
+    const InventoryRefillEntry& entry = g_inventoryRefillEntries[g_inventoryRefillSelected];
+    const bool ok = WriteInventoryValueByOffset(entry.offset, entry.value);
+    g_inventoryRefillLastResult = ok ? 1 : -1;
+    if (ok) {
+        Logf("Refilled %s to %d via inventory pointer.", entry.name, entry.value);
+    } else {
+        Logf("Refill failed for %s: inventory pointer is not ready.", entry.name);
+    }
+    return ok;
 }
 
 enum class UnlockCategory {
@@ -1001,13 +1031,13 @@ struct UnlockEntry {
 UnlockEntry g_unlockEntries[] = {
     {"Golden Flintlock Pistols", UnlockCategory::Pistols, UnlockMode::ItemFlag, 0x01, {0xC0, 0x2D, 0x03, 0xEC, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
     {"Captain's Wheellock Pistols (CC)", UnlockCategory::Pistols, UnlockMode::ItemFlag, 0x01, {0xF0, 0x2D, 0x03, 0xEC, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
-    {"Precision Shooter", UnlockCategory::Pistols, UnlockMode::NormalBundle, 0x02, {0x1A, 0x9A, 0x37, 0x66, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Precision Shooter (Freedom Cry)", UnlockCategory::Pistols, UnlockMode::NormalBundle, 0x02, {0x1A, 0x9A, 0x37, 0x66, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
 
     {"Pistol Swords", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x01, {0xCA, 0x7A, 0x0A, 0x1D, 0x09, 0x00, 0x00, 0x00}, 0, false, false, false},
     {"Scottish Broadsword", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x01, {0xA8, 0xC9, 0x45, 0xD2, 0x0C, 0x00, 0x00, 0x00}, 0, false, false, false},
     {"Persian Scimitars (CC)", UnlockCategory::Swords, UnlockMode::ItemFlag, 0x01, {0xE2, 0x30, 0x03, 0xEC, 0x07, 0x00, 0x00, 0x00}, 0, false, false, false},
-    {"Crude Iron Machete", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x02, {0xFD, 0xCB, 0x57, 0x7B, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
-    {"Mayan Machete", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x02, {0x22, 0x2F, 0x67, 0x81, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Crude Iron Machete (Freedom Cry)", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x02, {0xFD, 0xCB, 0x57, 0x7B, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
+    {"Mayan Machete (Freedom Cry)", UnlockCategory::Swords, UnlockMode::NormalBundle, 0x02, {0x22, 0x2F, 0x67, 0x81, 0x0F, 0x00, 0x00, 0x00}, 0, false, false, false},
 
     {"Governor Outfit", UnlockCategory::Outfits, UnlockMode::NormalBundle, 0x01, {0x27, 0x70, 0x48, 0xD5, 0x0C, 0x00, 0x00, 0x00}, 0, false, false, false},
     {"Templar Outfit", UnlockCategory::Outfits, UnlockMode::NormalBundle, 0x01, {0x12, 0x43, 0x85, 0x16, 0x0D, 0x00, 0x00, 0x00}, 0, false, false, false},
@@ -1064,14 +1094,14 @@ int CountEnabledUnlocks() {
 }
 
 void UpdateUnlockCounters() {
-    g_unlockPistolsFound = 0;
-    g_unlockPistolsPatched = 0;
+    g_unlockRecordsFound = 0;
+    g_unlockRecordsPatched = 0;
     for (int i = 0; i < kUnlockEntryCount; ++i) {
         if (g_unlockEntries[i].found) {
-            ++g_unlockPistolsFound;
+            ++g_unlockRecordsFound;
         }
         if (g_unlockEntries[i].patched) {
-            ++g_unlockPistolsPatched;
+            ++g_unlockRecordsPatched;
         }
     }
 }
@@ -1613,8 +1643,8 @@ void ScanAndApplyUnlocks() {
     UpdateUnlockCounters();
     Logf("Unlock scan finished: enabled=%d found=%d patched=%d.",
          CountEnabledUnlocks(),
-         g_unlockPistolsFound,
-         g_unlockPistolsPatched);
+         g_unlockRecordsFound,
+         g_unlockRecordsPatched);
     for (int i = 0; i < kUnlockEntryCount; ++i) {
         if (g_unlockEntries[i].enabled && g_unlockEntries[i].patched) {
             g_unlockEntries[i].enabled = false;
@@ -1625,7 +1655,7 @@ void ScanAndApplyUnlocks() {
 
 void MaintainUnlocks() {
     if (CountEnabledUnlocks() == 0) {
-        g_unlockPistolsLastScan = 0;
+        g_unlockLastScan = 0;
         UpdateUnlockCounters();
         InterlockedExchange(&g_unlockScanRequested, 0);
         return;
@@ -1633,10 +1663,10 @@ void MaintainUnlocks() {
 
     const DWORD now = GetTickCount();
     const bool requested = InterlockedExchange(&g_unlockScanRequested, 0) != 0;
-    if (!requested && g_unlockPistolsLastScan != 0 && now - g_unlockPistolsLastScan < 15000) {
+    if (!requested && g_unlockLastScan != 0 && now - g_unlockLastScan < 15000) {
         return;
     }
-    g_unlockPistolsLastScan = now;
+    g_unlockLastScan = now;
     ScanAndApplyUnlocks();
 }
 
@@ -1676,6 +1706,34 @@ void LoadConfig() {
         g_timeScale = 100.0f;
     }
 
+    char freeCamValue[32]{};
+    GetPrivateProfileStringA("Game", "FreeCamSpeed", "1.000000", freeCamValue, sizeof(freeCamValue), ownPath);
+    g_freeCamSpeed = static_cast<float>(atof(freeCamValue));
+    if (g_freeCamSpeed < 0.001f) {
+        g_freeCamSpeed = 0.001f;
+    }
+    if (g_freeCamSpeed > 100.0f) {
+        g_freeCamSpeed = 100.0f;
+    }
+
+    GetPrivateProfileStringA("Game", "FreeCamVerticalSpeed", "1.000000", freeCamValue, sizeof(freeCamValue), ownPath);
+    g_freeCamVerticalSpeed = static_cast<float>(atof(freeCamValue));
+    if (g_freeCamVerticalSpeed < 0.001f) {
+        g_freeCamVerticalSpeed = 0.001f;
+    }
+    if (g_freeCamVerticalSpeed > 100.0f) {
+        g_freeCamVerticalSpeed = 100.0f;
+    }
+
+    GetPrivateProfileStringA("Game", "FreeCamLookSpeed", "1.000000", freeCamValue, sizeof(freeCamValue), ownPath);
+    g_freeCamLookSpeed = static_cast<float>(atof(freeCamValue));
+    if (g_freeCamLookSpeed < 0.05f) {
+        g_freeCamLookSpeed = 0.05f;
+    }
+    if (g_freeCamLookSpeed > 20.0f) {
+        g_freeCamLookSpeed = 20.0f;
+    }
+
     char noclipSpeedValue[32]{};
     GetPrivateProfileStringA("Noclip", "Speed", "1.000000", noclipSpeedValue, sizeof(noclipSpeedValue), ownPath);
     g_noclipSpeed = static_cast<float>(atof(noclipSpeedValue));
@@ -1706,6 +1764,13 @@ void LoadConfig() {
         vk = atoi(keyValue);
         g_actions[i].hotkey = IsBindableHotkey(vk) && vk != g_menuHotkey ? vk : 0;
     }
+    for (int i = 0; i < kFreeCamControlCount; ++i) {
+        char defaultValue[16]{};
+        sprintf_s(defaultValue, "%d", g_freeCamControls[i].defaultKey);
+        GetPrivateProfileStringA("FreeCamControls", g_freeCamControls[i].id, defaultValue, keyValue, sizeof(keyValue), ownPath);
+        vk = atoi(keyValue);
+        g_freeCamControls[i].key = IsBindableHotkey(vk) ? vk : g_freeCamControls[i].defaultKey;
+    }
 }
 
 void UpdateTimeScaleInterval() {
@@ -1718,6 +1783,217 @@ void UpdateTimeScaleInterval() {
             interval = 1;
         }
         g_timeScaleInterval = interval;
+    }
+}
+
+bool TryReadPointer(std::uintptr_t address, std::uintptr_t& value) {
+    if (!address) {
+        return false;
+    }
+    __try {
+        value = *reinterpret_cast<std::uintptr_t*>(address);
+        return value != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        value = 0;
+        return false;
+    }
+}
+
+bool TryReadFloat(std::uintptr_t address, float& value) {
+    if (!address) {
+        return false;
+    }
+    __try {
+        value = *reinterpret_cast<float*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        value = 0.0f;
+        return false;
+    }
+}
+
+std::uintptr_t ResolveFreeCamTransform() {
+    std::uintptr_t value = 0;
+    if (!TryReadPointer(g_freeCamRootStaticAddress, value)) {
+        return 0;
+    }
+    if (!TryReadPointer(value + 0x08, value)) {
+        return 0;
+    }
+    if (!TryReadPointer(value + 0x34, value)) {
+        return 0;
+    }
+    if (!TryReadPointer(value + 0x54, value)) {
+        return 0;
+    }
+    if (!TryReadPointer(value, value)) {
+        return 0;
+    }
+    return value;
+}
+
+void CaptureFreeCamCoordinates(std::uintptr_t transform) {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    if (TryReadFloat(transform + 0x10, x) &&
+        TryReadFloat(transform + 0x14, y) &&
+        TryReadFloat(transform + 0x18, z)) {
+        g_freeCamX = x;
+        g_freeCamY = y;
+        g_freeCamZ = z;
+    }
+}
+
+bool IsPhysicalKeyDown(int vk) {
+    if (vk == 0) {
+        return false;
+    }
+    return (QueryPhysicalKeyState(vk) & 0x8000) != 0;
+}
+
+bool IsFreeCamControlDown(int controlIndex) {
+    if (controlIndex < 0 || controlIndex >= kFreeCamControlCount) {
+        return false;
+    }
+    return IsPhysicalKeyDown(g_freeCamControls[controlIndex].key);
+}
+
+LONG ScaleMouseDelta(LONG value) {
+    if (!g_freeCamEnabled || g_freeCamLookSpeed == 1.0f || value == 0) {
+        return value;
+    }
+
+    double scaled = static_cast<double>(value) * static_cast<double>(g_freeCamLookSpeed);
+    if (scaled > 2147483647.0) {
+        scaled = 2147483647.0;
+    } else if (scaled < -2147483648.0) {
+        scaled = -2147483648.0;
+    }
+    return static_cast<LONG>(scaled);
+}
+
+void ApplyFreeCamMouseLookScale(LPVOID data, DWORD dataSize) {
+    if (!g_freeCamEnabled || !data || dataSize < sizeof(LONG) * 2) {
+        return;
+    }
+
+    if (dataSize >= sizeof(DIMOUSESTATE2)) {
+        auto* state = static_cast<DIMOUSESTATE2*>(data);
+        state->lX = ScaleMouseDelta(state->lX);
+        state->lY = ScaleMouseDelta(state->lY);
+    } else if (dataSize >= sizeof(DIMOUSESTATE)) {
+        auto* state = static_cast<DIMOUSESTATE*>(data);
+        state->lX = ScaleMouseDelta(state->lX);
+        state->lY = ScaleMouseDelta(state->lY);
+    }
+}
+
+void ApplyFreeCamMouseLookScale(LPDIDEVICEOBJECTDATA objectData, DWORD count) {
+    if (!g_freeCamEnabled || !objectData) {
+        return;
+    }
+
+    for (DWORD i = 0; i < count; ++i) {
+        if (objectData[i].dwOfs == DIMOFS_X || objectData[i].dwOfs == DIMOFS_Y) {
+            const LONG value = static_cast<LONG>(objectData[i].dwData);
+            objectData[i].dwData = static_cast<DWORD>(ScaleMouseDelta(value));
+        }
+    }
+}
+
+void UpdateFreeCam() {
+    if (!g_freeCamEnabled || !g_freeCamHooksInstalled || GetForegroundWindow() != g_gameWindow) {
+        g_freeCamActive = false;
+        return;
+    }
+
+    const std::uintptr_t transform = ResolveFreeCamTransform();
+    if (!transform || !g_freeCamCamera) {
+        g_freeCamTransform = transform;
+        g_freeCamActive = false;
+        return;
+    }
+
+    const bool wasActive = g_freeCamActive;
+    g_freeCamTransform = transform;
+    if (!wasActive) {
+        CaptureFreeCamCoordinates(transform);
+        Logf("Free Cam active at transform 0x%08X camera 0x%08X.",
+             static_cast<unsigned int>(g_freeCamTransform),
+             static_cast<unsigned int>(g_freeCamCamera));
+    }
+    g_freeCamActive = true;
+
+    float yawA = 0.0f;
+    float yawB = 0.0f;
+    float pitchBasis = 0.0f;
+    if (!TryReadFloat(g_freeCamCamera + 0x14, yawA) ||
+        !TryReadFloat(g_freeCamCamera + 0x10, yawB) ||
+        !TryReadFloat(g_freeCamCamera + 0x18, pitchBasis)) {
+        g_freeCamActive = false;
+        return;
+    }
+
+    if (pitchBasis < -1.0f) {
+        pitchBasis = -1.0f;
+    }
+    if (pitchBasis > 1.0f) {
+        pitchBasis = 1.0f;
+    }
+
+    constexpr float pi = 3.14159265358979323846f;
+    const float yaw = atan2f(-yawA, yawB);
+    const float pitch = asinf(pitchBasis);
+    const float xyStep = IsFreeCamControlDown(kFreeCamBoost) ? g_freeCamSpeed * 5.0f : g_freeCamSpeed;
+    const float zStep = IsFreeCamControlDown(kFreeCamBoost) ? g_freeCamVerticalSpeed * 5.0f : g_freeCamVerticalSpeed;
+    const float forwardX = cosf(yaw) * xyStep;
+    const float forwardY = sinf(yaw) * xyStep;
+    const float forwardZ = sinf(pitch) * zStep;
+    bool moved = false;
+
+    if (IsFreeCamControlDown(kFreeCamMoveForward)) {
+        g_freeCamX += forwardX;
+        g_freeCamY -= forwardY;
+        g_freeCamZ += forwardZ;
+        moved = true;
+    }
+    if (IsFreeCamControlDown(kFreeCamMoveBackward)) {
+        g_freeCamX -= forwardX;
+        g_freeCamY += forwardY;
+        g_freeCamZ -= forwardZ;
+        moved = true;
+    }
+    if (IsFreeCamControlDown(kFreeCamStrafeLeft)) {
+        const float strafeYaw = yaw - (pi * 0.5f);
+        g_freeCamX += cosf(strafeYaw) * xyStep;
+        g_freeCamY -= sinf(strafeYaw) * xyStep;
+        moved = true;
+    }
+    if (IsFreeCamControlDown(kFreeCamStrafeRight)) {
+        const float strafeYaw = yaw + (pi * 0.5f);
+        g_freeCamX += cosf(strafeYaw) * xyStep;
+        g_freeCamY -= sinf(strafeYaw) * xyStep;
+        moved = true;
+    }
+    if (IsFreeCamControlDown(kFreeCamMoveUp)) {
+        g_freeCamZ += zStep;
+        moved = true;
+    }
+    if (IsFreeCamControlDown(kFreeCamMoveDown)) {
+        g_freeCamZ -= zStep;
+        moved = true;
+    }
+
+    if (IsFreeCamControlDown(kFreeCamExit)) {
+        g_freeCamEnabled = false;
+        g_freeCamActive = false;
+        Logf("Free Cam ended from %s.", HotkeyName(g_freeCamControls[kFreeCamExit].key));
+        return;
+    }
+
+    if (!moved) {
+        CaptureFreeCamCoordinates(transform);
     }
 }
 
@@ -1793,11 +2069,29 @@ void AssignMenuHotkey(int vk) {
                 g_actions[i].hotkey = 0;
             }
         }
+        for (int i = 0; i < kFreeCamControlCount; ++i) {
+            if (g_freeCamControls[i].key == vk) {
+                g_freeCamControls[i].key = 0;
+            }
+        }
     }
     g_menuHotkey = vk;
     g_suppressedHotkeyVk = vk;
     SaveConfig();
     Logf("Hotkey for Open/Close Menu set to %s.", HotkeyName(vk));
+}
+
+int FreeCamControlCaptureId(int controlIndex) {
+    return kFreeCamControlCaptureBase - controlIndex;
+}
+
+bool GetFreeCamControlCaptureIndex(int captureId, int& controlIndex) {
+    if (captureId > kFreeCamControlCaptureBase ||
+        captureId <= kFreeCamControlCaptureBase - kFreeCamControlCount) {
+        return false;
+    }
+    controlIndex = kFreeCamControlCaptureBase - captureId;
+    return controlIndex >= 0 && controlIndex < kFreeCamControlCount;
 }
 
 void AssignHotkey(int actionIndex, int vk) {
@@ -1816,11 +2110,44 @@ void AssignHotkey(int actionIndex, int vk) {
                 g_actions[i].hotkey = 0;
             }
         }
+        for (int i = 0; i < kFreeCamControlCount; ++i) {
+            if (g_freeCamControls[i].key == vk) {
+                g_freeCamControls[i].key = 0;
+            }
+        }
     }
     g_actions[actionIndex].hotkey = vk;
     g_suppressedHotkeyVk = vk;
     SaveConfig();
     Logf("Hotkey for %s set to %s.", g_actions[actionIndex].label, HotkeyName(vk));
+}
+
+void AssignFreeCamControlHotkey(int controlIndex, int vk) {
+    if (controlIndex < 0 || controlIndex >= kFreeCamControlCount) {
+        return;
+    }
+    if (vk != 0 && !IsBindableHotkey(vk)) {
+        return;
+    }
+    if (vk != 0) {
+        if (g_menuHotkey == vk) {
+            g_menuHotkey = 0;
+        }
+        for (int i = 0; i < kActionCount; ++i) {
+            if (g_actions[i].hotkey == vk) {
+                g_actions[i].hotkey = 0;
+            }
+        }
+        for (int i = 0; i < kFreeCamControlCount; ++i) {
+            if (i != controlIndex && g_freeCamControls[i].key == vk) {
+                g_freeCamControls[i].key = 0;
+            }
+        }
+    }
+    g_freeCamControls[controlIndex].key = vk;
+    g_suppressedHotkeyVk = vk;
+    SaveConfig();
+    Logf("Free Cam control %s set to %s.", g_freeCamControls[controlIndex].label, HotkeyName(vk));
 }
 
 void ToggleActionFromHotkey(int actionIndex) {
@@ -2241,6 +2568,62 @@ bool InstallInfiniteBreathPatch() {
     return true;
 }
 
+bool InstallLockConsumablesPatch() {
+    auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchLockConsumablesAddress);
+    if (patchAddress[0] == 0xE9) {
+        Log("Refusing Lock Consumables patch: 0x011A1F6D is already hooked by another tool.");
+        return false;
+    }
+    if (!BytesMatch(patchAddress, kOriginalLockConsumablesBytes, sizeof(kOriginalLockConsumablesBytes))) {
+        LogPatchMismatch("Lock Consumables patch at 0x011A1F6D",
+                         patchAddress,
+                         kOriginalLockConsumablesBytes,
+                         sizeof(kOriginalLockConsumablesBytes));
+        return false;
+    }
+
+    g_lockConsumablesCave = static_cast<std::uint8_t*>(
+        VirtualAlloc(nullptr, 80, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!g_lockConsumablesCave) {
+        Log("VirtualAlloc failed for Lock Consumables patch.");
+        return false;
+    }
+
+    std::uint8_t* p = g_lockConsumablesCave;
+
+    *p++ = 0xFF;
+    *p++ = 0x05;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_lockConsumablesHits);
+    p += 4;
+
+    *p++ = 0x80;
+    *p++ = 0x3D;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_lockConsumables);
+    p += 4;
+    *p++ = 0x00;
+    *p++ = 0x74;
+    auto* jeOriginal = p++;
+
+    // Skip the decrement, then store the unchanged amount back.
+    *p++ = 0x89;
+    *p++ = 0x41;
+    *p++ = 0x0C;
+    EmitJump(p, kPatchLockConsumablesReturnAddress);
+
+    auto* original = p;
+    *jeOriginal = static_cast<std::uint8_t>(original - jeOriginal - 1);
+    memcpy(p, kOriginalLockConsumablesBytes, sizeof(kOriginalLockConsumablesBytes));
+    p += sizeof(kOriginalLockConsumablesBytes);
+    EmitJump(p, kPatchLockConsumablesReturnAddress);
+
+    if (!WriteJump(patchAddress, g_lockConsumablesCave, sizeof(kOriginalLockConsumablesBytes))) {
+        Log("Refusing Lock Consumables patch: failed to write hook at 0x011A1F6D.");
+        return false;
+    }
+    Log("Installed Lock Consumables hook at 0x011A1F6D.");
+    return true;
+}
+
 bool InstallInventoryPointerPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchInventoryPointerAddress);
     if (patchAddress[0] == 0xE9) {
@@ -2338,201 +2721,6 @@ bool InstallInventoryPointerPatch() {
     return true;
 }
 
-bool InstallInventorySetPatch() {
-    auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchInventorySetAddress);
-    if (patchAddress[0] == 0xE9) {
-        Log("Refusing inventory set patch: 0x011A1F3D is already hooked by another tool.");
-        return false;
-    }
-    if (!BytesMatch(patchAddress, kOriginalInventorySetBytes, sizeof(kOriginalInventorySetBytes))) {
-        LogPatchMismatch("inventory set patch at 0x011A1F3D",
-                         patchAddress,
-                         kOriginalInventorySetBytes,
-                         sizeof(kOriginalInventorySetBytes));
-        return false;
-    }
-
-    g_inventorySetCave = static_cast<std::uint8_t*>(
-        VirtualAlloc(nullptr, 96, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-    if (!g_inventorySetCave) {
-        Log("VirtualAlloc failed for inventory set patch.");
-        return false;
-    }
-
-    std::uint8_t* p = g_inventorySetCave;
-
-    // inc dword ptr [&g_inventorySetHits]
-    *p++ = 0xFF;
-    *p++ = 0x05;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventorySetHits);
-    p += 4;
-
-    // mov dword ptr [&g_inventoryValue], ecx
-    *p++ = 0x89;
-    *p++ = 0x0D;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryValue);
-    p += 4;
-
-    // mov dword ptr [&g_inventoryItemId], edi
-    *p++ = 0x89;
-    *p++ = 0x3D;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryItemId);
-    p += 4;
-
-    // pushad; call ApplyInventoryValue; popad
-    *p++ = 0x60;
-    EmitCall(p, &ApplyInventoryValue);
-    *p++ = 0x61;
-
-    // mov ecx, dword ptr [&g_inventoryValue]
-    *p++ = 0x8B;
-    *p++ = 0x0D;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryValue);
-    p += 4;
-
-    // mov dword ptr [esi+0x0C], ecx; pop esi; pop ebp
-    memcpy(p, kOriginalInventorySetBytes, sizeof(kOriginalInventorySetBytes));
-    p += sizeof(kOriginalInventorySetBytes);
-    EmitJump(p, kPatchInventorySetReturnAddress);
-
-    if (!WriteJump(patchAddress, g_inventorySetCave, sizeof(kOriginalInventorySetBytes))) {
-        Log("Refusing inventory set patch: failed to write hook at 0x011A1F3D.");
-        return false;
-    }
-    Log("Installed inventory set hook at 0x011A1F3D.");
-    return true;
-}
-
-bool InstallInventorySetAltPatch() {
-    auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchInventorySetAltAddress);
-    if (patchAddress[0] == 0xE9) {
-        Log("Refusing inventory set-alt patch: 0x011A1F6F is already hooked by another tool.");
-        return false;
-    }
-    if (!BytesMatch(patchAddress, kOriginalInventorySetAltBytes, sizeof(kOriginalInventorySetAltBytes))) {
-        LogPatchMismatch("inventory set-alt patch at 0x011A1F6F",
-                         patchAddress,
-                         kOriginalInventorySetAltBytes,
-                         sizeof(kOriginalInventorySetAltBytes));
-        return false;
-    }
-
-    g_inventorySetAltCave = static_cast<std::uint8_t*>(
-        VirtualAlloc(nullptr, 96, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-    if (!g_inventorySetAltCave) {
-        Log("VirtualAlloc failed for inventory set-alt patch.");
-        return false;
-    }
-
-    std::uint8_t* p = g_inventorySetAltCave;
-
-    // inc dword ptr [&g_inventorySetAltHits]
-    *p++ = 0xFF;
-    *p++ = 0x05;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventorySetAltHits);
-    p += 4;
-
-    // mov dword ptr [&g_inventoryValue], eax
-    *p++ = 0xA3;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryValue);
-    p += 4;
-
-    // mov dword ptr [&g_inventoryItemId], edi
-    *p++ = 0x89;
-    *p++ = 0x3D;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryItemId);
-    p += 4;
-
-    // pushad; call ApplyInventoryValue; popad
-    *p++ = 0x60;
-    EmitCall(p, &ApplyInventoryValue);
-    *p++ = 0x61;
-
-    // mov eax, dword ptr [&g_inventoryValue]
-    *p++ = 0xA1;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryValue);
-    p += 4;
-
-    // mov dword ptr [ecx+0x0C], eax; mov al, 1
-    memcpy(p, kOriginalInventorySetAltBytes, sizeof(kOriginalInventorySetAltBytes));
-    p += sizeof(kOriginalInventorySetAltBytes);
-    EmitJump(p, kPatchInventorySetAltReturnAddress);
-
-    if (!WriteJump(patchAddress, g_inventorySetAltCave, sizeof(kOriginalInventorySetAltBytes))) {
-        Log("Refusing inventory set-alt patch: failed to write hook at 0x011A1F6F.");
-        return false;
-    }
-    Log("Installed inventory set-alt hook at 0x011A1F6F.");
-    return true;
-}
-
-bool InstallInventoryEntrySubtractPatch() {
-    auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchInventoryEntrySubtractAddress);
-    if (patchAddress[0] == 0xE9) {
-        Log("Refusing inventory entry-subtract patch: 0x011A1FA3 is already hooked by another tool.");
-        return false;
-    }
-    if (!BytesMatch(patchAddress, kOriginalInventoryEntrySubtractBytes, sizeof(kOriginalInventoryEntrySubtractBytes))) {
-        LogPatchMismatch("inventory entry-subtract patch at 0x011A1FA3",
-                         patchAddress,
-                         kOriginalInventoryEntrySubtractBytes,
-                         sizeof(kOriginalInventoryEntrySubtractBytes));
-        return false;
-    }
-
-    g_inventoryEntrySubtractCave = static_cast<std::uint8_t*>(
-        VirtualAlloc(nullptr, 112, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-    if (!g_inventoryEntrySubtractCave) {
-        Log("VirtualAlloc failed for inventory entry-subtract patch.");
-        return false;
-    }
-
-    std::uint8_t* p = g_inventoryEntrySubtractCave;
-
-    // inc dword ptr [&g_inventoryEntrySubtractHits]
-    *p++ = 0xFF;
-    *p++ = 0x05;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryEntrySubtractHits);
-    p += 4;
-
-    // mov dword ptr [&g_inventoryValue], eax
-    *p++ = 0xA3;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryValue);
-    p += 4;
-
-    // mov eax, dword ptr [esi+0x04]
-    *p++ = 0x8B;
-    *p++ = 0x46;
-    *p++ = 0x04;
-
-    // mov dword ptr [&g_inventoryItemId], eax
-    *p++ = 0xA3;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryItemId);
-    p += 4;
-
-    // pushad; call ApplyInventoryValue; popad
-    *p++ = 0x60;
-    EmitCall(p, &ApplyInventoryValue);
-    *p++ = 0x61;
-
-    // mov eax, dword ptr [&g_inventoryValue]
-    *p++ = 0xA1;
-    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_inventoryValue);
-    p += 4;
-
-    // mov dword ptr [esi+0x0C], eax; mov al, 1
-    memcpy(p, kOriginalInventoryEntrySubtractBytes, sizeof(kOriginalInventoryEntrySubtractBytes));
-    p += sizeof(kOriginalInventoryEntrySubtractBytes);
-    EmitJump(p, kPatchInventoryEntrySubtractReturnAddress);
-
-    if (!WriteJump(patchAddress, g_inventoryEntrySubtractCave, sizeof(kOriginalInventoryEntrySubtractBytes))) {
-        Log("Refusing inventory entry-subtract patch: failed to write hook at 0x011A1FA3.");
-        return false;
-    }
-    Log("Installed inventory entry-subtract hook at 0x011A1FA3.");
-    return true;
-}
-
 bool InstallNoclipUpdatePatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchNoclipUpdateAddress);
     if (patchAddress[0] == 0xE9) {
@@ -2576,6 +2764,183 @@ bool InstallNoclipUpdatePatch() {
         return false;
     }
     Log("Installed noclip update hook at 0x016FAACD.");
+    return true;
+}
+
+bool InstallFreeCamPatch() {
+    if (g_freeCamHooksInstalled) {
+        return true;
+    }
+
+    auto* rootPattern = FindMainModulePattern(kFreeCamRootPattern, sizeof(kFreeCamRootPattern));
+    if (!rootPattern) {
+        Log("Free Cam unavailable: camera root signature was not found.");
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+    g_freeCamRootStaticAddress = *reinterpret_cast<std::uint32_t*>(rootPattern + 10);
+
+    g_freeCamTransformAddress = FindMainModulePattern(kFreeCamTransformPattern, sizeof(kFreeCamTransformPattern));
+    if (!g_freeCamTransformAddress) {
+        Log("Free Cam unavailable: transform signature was not found.");
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+    if (g_freeCamTransformAddress[0] == 0xE9) {
+        Log("Refusing Free Cam transform patch: target is already hooked by another tool.");
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+    if (!BytesMatch(g_freeCamTransformAddress,
+                    kOriginalFreeCamTransformBytes,
+                    sizeof(kOriginalFreeCamTransformBytes))) {
+        LogPatchMismatch("Free Cam transform patch",
+                         g_freeCamTransformAddress,
+                         kOriginalFreeCamTransformBytes,
+                         sizeof(kOriginalFreeCamTransformBytes));
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+
+    auto* cameraPattern = FindMainModulePattern(kFreeCamCameraPattern, sizeof(kFreeCamCameraPattern));
+    if (!cameraPattern) {
+        Log("Free Cam unavailable: camera orientation signature was not found.");
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+    g_freeCamCameraAddress = cameraPattern + kFreeCamCameraPatchOffset;
+    if (g_freeCamCameraAddress[0] == 0xE9) {
+        Log("Refusing Free Cam camera patch: target is already hooked by another tool.");
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+    if (!BytesMatch(g_freeCamCameraAddress,
+                    kOriginalFreeCamCameraBytes,
+                    sizeof(kOriginalFreeCamCameraBytes))) {
+        LogPatchMismatch("Free Cam camera patch",
+                         g_freeCamCameraAddress,
+                         kOriginalFreeCamCameraBytes,
+                         sizeof(kOriginalFreeCamCameraBytes));
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+
+    g_freeCamTransformCave = static_cast<std::uint8_t*>(
+        VirtualAlloc(nullptr, 224, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    g_freeCamCameraCave = static_cast<std::uint8_t*>(
+        VirtualAlloc(nullptr, 96, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!g_freeCamTransformCave || !g_freeCamCameraCave) {
+        Log("VirtualAlloc failed for Free Cam patch.");
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+
+    std::uint8_t* p = g_freeCamTransformCave;
+    *p++ = 0xFF;
+    *p++ = 0x05;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_freeCamTransformHits);
+    p += 4;
+
+    *p++ = 0x80;
+    *p++ = 0x3D;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_freeCamEnabled);
+    p += 4;
+    *p++ = 0x00;
+    *p++ = 0x74;
+    auto* jeOriginalTransform = p++;
+
+    *p++ = 0x53; // push ebx
+    *p++ = 0x52; // push edx
+    *p++ = 0xBB; // mov ebx, &g_freeCamTransform
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_freeCamTransform);
+    p += 4;
+    *p++ = 0x8B; // mov ebx, [ebx]
+    *p++ = 0x1B;
+    *p++ = 0x85; // test ebx, ebx
+    *p++ = 0xDB;
+    *p++ = 0x74;
+    auto* jeRestoreTransform = p++;
+
+    *p++ = 0x8B; // mov edx, [&g_freeCamX]
+    *p++ = 0x15;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_freeCamX);
+    p += 4;
+    *p++ = 0x89; // mov [ebx+10], edx
+    *p++ = 0x53;
+    *p++ = 0x10;
+    *p++ = 0x8B; // mov edx, [&g_freeCamY]
+    *p++ = 0x15;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_freeCamY);
+    p += 4;
+    *p++ = 0x89; // mov [ebx+14], edx
+    *p++ = 0x53;
+    *p++ = 0x14;
+    *p++ = 0x8B; // mov edx, [&g_freeCamZ]
+    *p++ = 0x15;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_freeCamZ);
+    p += 4;
+    *p++ = 0x89; // mov [ebx+18], edx
+    *p++ = 0x53;
+    *p++ = 0x18;
+
+    auto* restoreTransform = p;
+    *jeRestoreTransform = static_cast<std::uint8_t>(restoreTransform - jeRestoreTransform - 1);
+    *p++ = 0x5A; // pop edx
+    *p++ = 0x5B; // pop ebx
+    *p++ = 0x0F; // movaps xmm0, [esi+10]
+    *p++ = 0x28;
+    *p++ = 0x46;
+    *p++ = 0x10;
+    *p++ = 0x0F; // movaps [esi+10], xmm0
+    *p++ = 0x29;
+    *p++ = 0x46;
+    *p++ = 0x10;
+    *p++ = 0x0F; // movaps xmm0, [edi+20]
+    *p++ = 0x28;
+    *p++ = 0x47;
+    *p++ = 0x20;
+    EmitJump(p, reinterpret_cast<std::uintptr_t>(g_freeCamTransformAddress + sizeof(kOriginalFreeCamTransformBytes)));
+
+    auto* originalTransform = p;
+    *jeOriginalTransform = static_cast<std::uint8_t>(originalTransform - jeOriginalTransform - 1);
+    memcpy(p, kOriginalFreeCamTransformBytes, sizeof(kOriginalFreeCamTransformBytes));
+    p += sizeof(kOriginalFreeCamTransformBytes);
+    EmitJump(p, reinterpret_cast<std::uintptr_t>(g_freeCamTransformAddress + sizeof(kOriginalFreeCamTransformBytes)));
+
+    p = g_freeCamCameraCave;
+    *p++ = 0xFF;
+    *p++ = 0x05;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_freeCamCameraHits);
+    p += 4;
+    *p++ = 0x89; // mov [&g_freeCamCamera], edi
+    *p++ = 0x3D;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_freeCamCamera);
+    p += 4;
+    memcpy(p, kOriginalFreeCamCameraBytes, sizeof(kOriginalFreeCamCameraBytes));
+    p += sizeof(kOriginalFreeCamCameraBytes);
+    EmitJump(p, reinterpret_cast<std::uintptr_t>(g_freeCamCameraAddress + sizeof(kOriginalFreeCamCameraBytes)));
+
+    if (!WriteJump(g_freeCamTransformAddress,
+                   g_freeCamTransformCave,
+                   sizeof(kOriginalFreeCamTransformBytes))) {
+        Log("Refusing Free Cam transform patch: failed to write hook.");
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+    if (!WriteJump(g_freeCamCameraAddress,
+                   g_freeCamCameraCave,
+                   sizeof(kOriginalFreeCamCameraBytes))) {
+        Log("Refusing Free Cam camera patch: failed to write hook.");
+        g_freeCamInstallFailed = true;
+        return false;
+    }
+
+    g_freeCamHooksInstalled = true;
+    g_freeCamInstallFailed = false;
+    Logf("Installed Free Cam hooks: transform=0x%08X camera=0x%08X root=0x%08X.",
+         reinterpret_cast<unsigned int>(g_freeCamTransformAddress),
+         reinterpret_cast<unsigned int>(g_freeCamCameraAddress),
+         static_cast<unsigned int>(g_freeCamRootStaticAddress));
     return true;
 }
 
@@ -2848,14 +3213,8 @@ bool InstallPatches() {
     g_missionTimerPatchReady = InstallMissionTimerPatch();
     g_missionTimer2PatchReady = InstallMissionTimer2Patch();
     g_missionTimersPatchReady = g_missionTimerPatchReady || g_missionTimer2PatchReady;
+    g_lockConsumablesPatchReady = InstallLockConsumablesPatch();
     g_inventoryPointerPatchReady = InstallInventoryPointerPatch();
-    g_inventorySetPatchReady = InstallInventorySetPatch();
-    g_inventorySetAltPatchReady = InstallInventorySetAltPatch();
-    g_inventoryEntrySubtractPatchReady = InstallInventoryEntrySubtractPatch();
-    g_inventoryPatchReady = g_inventoryPointerPatchReady ||
-                            g_inventorySetPatchReady ||
-                            g_inventorySetAltPatchReady ||
-                            g_inventoryEntrySubtractPatchReady;
     g_noclipPatchReady = InstallNoclipUpdatePatch();
 
     if (!g_shipPatchReady) {
@@ -2882,23 +3241,11 @@ bool InstallPatches() {
     if (!g_noReloadPatchReady) {
         g_noReload = false;
     }
+    if (!g_lockConsumablesPatchReady) {
+        g_lockConsumables = false;
+    }
     if (!g_missionTimersPatchReady) {
         g_freezeMissionTimer = false;
-    }
-    if (!g_inventoryPatchReady) {
-        g_infiniteMoney = false;
-        g_infiniteSugar = false;
-        g_infiniteRum = false;
-        g_infiniteWood = false;
-        g_infiniteMetal = false;
-        g_infiniteCloth = false;
-        g_infiniteSmokeBombs = false;
-        g_infiniteBullets = false;
-        g_infiniteSleepDarts = false;
-        g_infiniteBerserkDarts = false;
-        g_infiniteRopeDarts = false;
-        g_infiniteHarpoons = false;
-        g_infiniteThrowingKnives = false;
     }
     if (!g_noclipPatchReady) {
         g_noclipEnabled = false;
@@ -2913,13 +3260,14 @@ bool InstallPatches() {
         !g_stealthModePatchReady &&
         !g_noReloadPatchReady &&
         !g_missionTimersPatchReady &&
-        !g_inventoryPatchReady &&
+        !g_lockConsumablesPatchReady &&
+        !g_inventoryPointerPatchReady &&
         !g_noclipPatchReady) {
         Log("No gameplay patches installed; UI will load with features unavailable.");
         return false;
     }
     g_installed = true;
-    Logf("AC4Tools standalone patches installed: ship=%d cannonCooldown=%d allyGodmode=%d timescale=%d player=%d breath=%d stealth=%d noReload=%d timers=%d inventory=%d noclip=%d.",
+    Logf("AC4Tools standalone patches installed: ship=%d cannonCooldown=%d allyGodmode=%d timescale=%d player=%d breath=%d stealth=%d noReload=%d timers=%d lockConsumables=%d inventoryPointer=%d noclip=%d.",
          g_shipPatchReady ? 1 : 0,
          g_noCannonCooldownPatchReady ? 1 : 0,
          g_allyGodmodePatchReady ? 1 : 0,
@@ -2929,7 +3277,8 @@ bool InstallPatches() {
          g_stealthModePatchReady ? 1 : 0,
          g_noReloadPatchReady ? 1 : 0,
          g_missionTimersPatchReady ? 1 : 0,
-         g_inventoryPatchReady ? 1 : 0,
+         g_lockConsumablesPatchReady ? 1 : 0,
+         g_inventoryPointerPatchReady ? 1 : 0,
          g_noclipPatchReady ? 1 : 0);
     return true;
 }
@@ -2989,12 +3338,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         if (g_hotkeyCaptureAction != -1 &&
             (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)) {
             const int vk = static_cast<int>(wparam);
+            int freeCamControlIndex = -1;
+            const bool isFreeCamControlCapture =
+                GetFreeCamControlCaptureIndex(g_hotkeyCaptureAction, freeCamControlIndex);
             if (vk == VK_ESCAPE) {
                 g_hotkeyCaptureAction = -1;
                 Log("Hotkey capture cancelled.");
             } else if (vk == VK_BACK || vk == VK_DELETE) {
                 if (g_hotkeyCaptureAction == kMenuHotkeyCapture) {
                     AssignMenuHotkey(0);
+                } else if (isFreeCamControlCapture) {
+                    AssignFreeCamControlHotkey(freeCamControlIndex, 0);
                 } else {
                     AssignHotkey(g_hotkeyCaptureAction, 0);
                 }
@@ -3002,6 +3356,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             } else if (IsBindableHotkey(vk)) {
                 if (g_hotkeyCaptureAction == kMenuHotkeyCapture) {
                     AssignMenuHotkey(vk);
+                } else if (isFreeCamControlCapture) {
+                    AssignFreeCamControlHotkey(freeCamControlIndex, vk);
                 } else {
                     AssignHotkey(g_hotkeyCaptureAction, vk);
                 }
@@ -3149,6 +3505,52 @@ void DrawHotkeysTab() {
 
         ImGui::EndTable();
     }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextUnformatted("Free Cam Control Hotkeys");
+    ImGui::TextDisabled("These are held while Free Cam is active; they are not toggle hotkeys.");
+    if (ImGui::BeginTable("FreeCamControlHotkeyTable", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Set", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableHeadersRow();
+
+        for (int i = 0; i < kFreeCamControlCount; ++i) {
+            const int captureId = FreeCamControlCaptureId(i);
+            ImGui::TableNextRow();
+
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(g_freeCamControls[i].label);
+
+            ImGui::TableSetColumnIndex(1);
+            if (g_hotkeyCaptureAction == captureId) {
+                ImGui::TextUnformatted("Press key...");
+            } else {
+                ImGui::TextUnformatted(HotkeyName(g_freeCamControls[i].key));
+            }
+
+            ImGui::TableSetColumnIndex(2);
+            ImGui::PushID(captureId);
+            if (ImGui::Button(g_hotkeyCaptureAction == captureId ? "Cancel" : "Set", ImVec2(64.0f, 0.0f))) {
+                if (g_hotkeyCaptureAction == captureId) {
+                    g_hotkeyCaptureAction = -1;
+                } else {
+                    g_hotkeyCaptureAction = captureId;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("None", ImVec2(64.0f, 0.0f))) {
+                AssignFreeCamControlHotkey(i, 0);
+                if (g_hotkeyCaptureAction == captureId) {
+                    g_hotkeyCaptureAction = -1;
+                }
+            }
+            ImGui::PopID();
+        }
+
+        ImGui::EndTable();
+    }
 }
 
 void DrawInfoRow(const char* label, const char* value) {
@@ -3286,50 +3688,6 @@ void DrawMenu() {
                         "Turning it off leaves the current ship state as-is.");
                 }
             }
-            if (!g_inventoryPatchReady) {
-                ImGui::TextDisabled("Infinite Ship Crew unavailable: inventory hook was not installed.");
-            } else {
-                bool value = g_infiniteShipCrew;
-                if (ImGui::Checkbox("Infinite Ship Crew", &value)) {
-                    g_infiniteShipCrew = value;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(
-                        "Keeps ship crew at 40 while enabled.\n"
-                        "If it does not apply right away, leave the wheel and take control again.\n"
-                        "Turning it off leaves the current crew value as-is.");
-                }
-                value = g_infiniteMortarShotAmmo;
-                if (ImGui::Checkbox("Infinite Mortar Shot Ammo", &value)) {
-                    g_infiniteMortarShotAmmo = value;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(
-                        "Keeps mortar shot ammo at 15 while enabled.\n"
-                        "If it does not apply right away, leave the wheel and take control again.\n"
-                        "Turning it off leaves the current value as-is.");
-                }
-                value = g_infiniteHeavyShotAmmo;
-                if (ImGui::Checkbox("Infinite Heavy Shot Ammo", &value)) {
-                    g_infiniteHeavyShotAmmo = value;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(
-                        "Keeps heavy shot ammo at 25 while enabled.\n"
-                        "If it does not apply right away, leave the wheel and take control again.\n"
-                        "Turning it off leaves the current value as-is.");
-                }
-                value = g_infiniteFireBarrels;
-                if (ImGui::Checkbox("Infinite Fire Barrels", &value)) {
-                    g_infiniteFireBarrels = value;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(
-                        "Keeps fire barrels at 25 while enabled.\n"
-                        "If it does not apply right away, leave the wheel and take control again.\n"
-                        "Turning it off leaves the current value as-is.");
-                }
-            }
             if (!g_noCannonCooldownPatchReady) {
                 ImGui::TextDisabled("No Cannon Cooldown unavailable: byte patch was not installed.");
             } else {
@@ -3359,20 +3717,15 @@ void DrawMenu() {
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Player")) {
-            if (!g_playerHealthPatchReady && !g_infiniteBreathPatchReady && !g_noReloadPatchReady && !g_inventoryPatchReady) {
+            if (!g_playerHealthPatchReady && !g_infiniteBreathPatchReady && !g_noReloadPatchReady && !g_lockConsumablesPatchReady) {
                 ImGui::TextDisabled("Player options unavailable: hooks were not installed.");
             } else {
-                ImGui::Columns(3, "PlayerColumns", false);
+                ImGui::Columns(2, "PlayerColumns", false);
 
                 if (g_playerHealthPatchReady) {
                     ImGui::Checkbox("God Mode", &g_playerGodmode);
                 } else {
                     ImGui::TextDisabled("God Mode unavailable");
-                }
-                if (g_inventoryPatchReady) {
-                    ImGui::Checkbox("Infinite Money", &g_infiniteMoney);
-                } else {
-                    ImGui::TextDisabled("Infinite Money unavailable");
                 }
                 if (g_infiniteBreathPatchReady) {
                     ImGui::Checkbox("Infinite Breath", &g_infiniteBreath);
@@ -3397,28 +3750,64 @@ void DrawMenu() {
                 }
 
                 ImGui::NextColumn();
-                if (g_inventoryPatchReady) {
-                    ImGui::Checkbox("Infinite Bullets", &g_infiniteBullets);
-                    ImGui::Checkbox("Infinite Smokebombs", &g_infiniteSmokeBombs);
-                    ImGui::Checkbox("Infinite Sleep Darts", &g_infiniteSleepDarts);
-                    ImGui::Checkbox("Infinite Berserk Darts", &g_infiniteBerserkDarts);
-                    ImGui::Checkbox("Infinite Throwing Knives", &g_infiniteThrowingKnives);
-                    ImGui::Checkbox("Infinite Harpoons", &g_infiniteHarpoons);
-                    ImGui::Checkbox("Infinite Rope Darts", &g_infiniteRopeDarts);
+                if (g_lockConsumablesPatchReady) {
+                    if (ImGui::Checkbox("Lock Consumables (incl Ship Ammo)", &g_lockConsumables)) {
+                        Log(g_lockConsumables ? "Lock Consumables enabled." :
+                                                "Lock Consumables disabled.");
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Prevents the shared consumable decrement from lowering values while enabled.\n"
+                            "Best used after your save is fully loaded.");
+                    }
+                } else {
+                    ImGui::TextDisabled("Lock Consumables unavailable");
                 }
 
-                ImGui::NextColumn();
-                if (g_inventoryPatchReady) {
-                    ImGui::Checkbox("Infinite Sugar", &g_infiniteSugar);
-                    ImGui::Checkbox("Infinite Rum", &g_infiniteRum);
-                    ImGui::Checkbox("Infinite Wood", &g_infiniteWood);
-                    ImGui::Checkbox("Infinite Cloth", &g_infiniteCloth);
-                    ImGui::Checkbox("Infinite Metal", &g_infiniteMetal);
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::TextUnformatted("One-time Inventory Refill");
+                ImGui::TextWrapped("Choose one resource/ammo type and refill it once to the old preset value.");
+                if (g_inventoryRefillSelected < 0 || g_inventoryRefillSelected >= kInventoryRefillEntryCount) {
+                    g_inventoryRefillSelected = 0;
+                }
+                const InventoryRefillEntry& selectedRefill = g_inventoryRefillEntries[g_inventoryRefillSelected];
+                ImGui::SetNextItemWidth(260.0f);
+                if (ImGui::BeginCombo("Resource", selectedRefill.name)) {
+                    for (int i = 0; i < kInventoryRefillEntryCount; ++i) {
+                        const bool selected = i == g_inventoryRefillSelected;
+                        if (ImGui::Selectable(g_inventoryRefillEntries[i].name, selected)) {
+                            g_inventoryRefillSelected = i;
+                            g_inventoryRefillLastResult = 0;
+                        }
+                        if (selected) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                char refillButton[64]{};
+                sprintf_s(refillButton, "Refill to %d", selectedRefill.value);
+                if (!g_inventoryPointerPatchReady || g_inventoryBase == 0) {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button(refillButton)) {
+                    RefillSelectedInventoryEntry();
+                }
+                if (!g_inventoryPointerPatchReady || g_inventoryBase == 0) {
+                    ImGui::EndDisabled();
+                    ImGui::TextDisabled("Inventory pointer not ready yet; load a save and open inventory/ship menus first.");
+                }
+                if (g_inventoryRefillLastResult > 0) {
+                    ImGui::TextDisabled("Last refill succeeded.");
+                } else if (g_inventoryRefillLastResult < 0) {
+                    ImGui::TextDisabled("Last refill failed.");
                 }
 
                 ImGui::Columns(1);
-                if (!g_inventoryPatchReady) {
-                    ImGui::TextDisabled("Infinite item options unavailable: hooks were not installed.");
+                if (!g_lockConsumablesPatchReady) {
+                    ImGui::TextDisabled("Consumable lock unavailable: hook was not installed.");
                 }
             }
             ImGui::EndTabItem();
@@ -3513,22 +3902,79 @@ void DrawMenu() {
             } else {
                 ImGui::TextDisabled("Freeze Mission Timer unavailable: hooks were not installed.");
             }
+            ImGui::Separator();
+            bool freeCam = g_freeCamEnabled;
+            if (ImGui::Checkbox("Free Cam", &freeCam)) {
+                g_freeCamEnabled = freeCam;
+                AfterFreeCamToggle();
+                SaveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Camera-only free roam. Hooks install only when this is enabled.\n"
+                    "Mouse aims the camera. Movement, boost, and exit keys are configurable\n"
+                    "in the Free Cam Control Hotkeys block under the Hotkeys tab.");
+            }
+
+            float freeCamSpeed = g_freeCamSpeed;
+            ImGui::SetNextItemWidth(280.0f);
+            if (ImGui::DragFloat("Free Cam Speed", &freeCamSpeed, 0.01f, 0.001f, 100.0f, "%.3f")) {
+                if (freeCamSpeed < 0.001f) {
+                    freeCamSpeed = 0.001f;
+                }
+                if (freeCamSpeed > 100.0f) {
+                    freeCamSpeed = 100.0f;
+                }
+                g_freeCamSpeed = freeCamSpeed;
+                SaveConfig();
+            }
+
+            float freeCamVerticalSpeed = g_freeCamVerticalSpeed;
+            ImGui::SetNextItemWidth(280.0f);
+            if (ImGui::DragFloat("Free Cam Vertical Speed", &freeCamVerticalSpeed, 0.01f, 0.001f, 100.0f, "%.3f")) {
+                if (freeCamVerticalSpeed < 0.001f) {
+                    freeCamVerticalSpeed = 0.001f;
+                }
+                if (freeCamVerticalSpeed > 100.0f) {
+                    freeCamVerticalSpeed = 100.0f;
+                }
+                g_freeCamVerticalSpeed = freeCamVerticalSpeed;
+                SaveConfig();
+            }
+
+            float freeCamLookSpeed = g_freeCamLookSpeed;
+            ImGui::SetNextItemWidth(280.0f);
+            if (ImGui::DragFloat("Free Cam Look Speed", &freeCamLookSpeed, 0.01f, 0.05f, 20.0f, "%.3f")) {
+                if (freeCamLookSpeed < 0.05f) {
+                    freeCamLookSpeed = 0.05f;
+                }
+                if (freeCamLookSpeed > 20.0f) {
+                    freeCamLookSpeed = 20.0f;
+                }
+                g_freeCamLookSpeed = freeCamLookSpeed;
+                SaveConfig();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Scales mouse look while Free Cam is enabled.");
+            }
+
+            ImGui::Text("Free Cam state: %s",
+                        g_freeCamActive ? "active" :
+                        (g_freeCamEnabled ? "waiting for camera" :
+                        (g_freeCamHooksInstalled ? "installed" :
+                        (g_freeCamInstallFailed ? "install failed" : "not installed"))));
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Unlocks")) {
-            ImGui::TextDisabled("Best used from the ship cabin, where weapon/outfit records are loaded.");
             ImGui::TextDisabled("Back up your save first: unlocks can become permanent/irreversible once the game saves.");
             ImGui::TextDisabled("Unlocks can softlock saves if something was meant to unlock later through progression.");
-            ImGui::TextDisabled("Per-item unlocks auto-uncheck after success and stay unlocked for this game session.");
             ImGui::Separator();
 
-            if (g_globalHiddenUnlockInstalled) {
-                ImGui::TextDisabled("Global Hidden Unlocks installed for this session.");
-            } else if (ImGui::Button("Install Global Hidden Unlocks")) {
-                InstallGlobalHiddenUnlockPatch();
-            }
-            ImGui::TextDisabled("Use at the main menu before loading a save; can be saved permanently by the game.");
-            ImGui::TextDisabled("Recommended only with a save backup.");
+            ImGui::TextUnformatted("Targeted unlock checkboxes");
+            ImGui::TextWrapped(
+                "Use the checkboxes below when you only want specific listed unlocks. "
+                "Best used from the ship cabin, where weapon, outfit, and ship records are usually loaded.");
+            ImGui::TextDisabled("Checked entries are scanned/applied in the background and auto-uncheck after success.");
             ImGui::Checkbox("Finish Community Challenges if needed for certain unlocks", &g_finishCommunityChallengesForUnlocks);
             ImGui::TextDisabled("Only affects entries that require community completion (CC); normal unlocks ignore this.");
             ImGui::Separator();
@@ -3551,7 +3997,7 @@ void DrawMenu() {
                             entry.enabled = enabled;
                             entry.found = false;
                             entry.patched = false;
-                            g_unlockPistolsLastScan = 0;
+                            g_unlockLastScan = 0;
                             if (entry.enabled) {
                                 InterlockedExchange(&g_unlockScanRequested, 1);
                             }
@@ -3584,12 +4030,56 @@ void DrawMenu() {
             ImGui::Spacing();
             const int enabledCount = CountEnabledUnlocks();
             ImGui::Text("Pending: %d", enabledCount);
-            ImGui::Text("Done this session: %d", g_unlockPistolsPatched);
+            ImGui::Text("Done this session: %d", g_unlockRecordsPatched);
             if (g_unlockScanRunning != 0) {
                 ImGui::TextDisabled("Scan running in background...");
             }
             if (enabledCount > 0) {
                 ImGui::TextDisabled("If an item stays waiting, go to the ship cabin and keep it checked.");
+            }
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("Global hidden unlocks");
+            ImGui::TextWrapped(
+                "Alternative to the targeted checkbox list above: installs a broad hidden-unlock patch for this session. "
+                "It unlocks all at once and can expose additional hidden rewards that are not available as individual checkboxes.");
+            ImGui::TextDisabled("Use at the main menu before loading a save. Recommended only with a save backup.");
+            if (g_globalHiddenUnlockInstalled) {
+                ImGui::TextDisabled("Global Hidden Unlocks installed for this session.");
+            } else if (ImGui::Button("Install Global Hidden Unlocks")) {
+                InstallGlobalHiddenUnlockPatch();
+            }
+
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Freedom Cry")) {
+            ImGui::TextWrapped(
+                "Adds to your Freedom Cry resistance progress. "
+                "Use this while loaded into Freedom Cry.");
+
+            const bool freedomCryReady = g_inventoryPointerPatchReady && g_inventoryBase != 0;
+            if (!freedomCryReady) {
+                ImGui::BeginDisabled();
+            }
+
+            if (ImGui::Button("Add 100 Liberated Slaves")) {
+                g_freedomCryLastResult =
+                    AddInventoryValueByOffset(0xB4, 100, "Liberated Slaves") ? 1 : -1;
+            }
+            if (ImGui::Button("Add 100 Recruited Maroons")) {
+                g_freedomCryLastResult =
+                    AddInventoryValueByOffset(0xB8, 100, "Recruited Maroons") ? 1 : -1;
+            }
+
+            if (!freedomCryReady) {
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("Not ready yet; load Freedom Cry and open an inventory or ship menu first.");
+            }
+
+            if (g_freedomCryLastResult > 0) {
+                ImGui::TextDisabled("Last Freedom Cry add succeeded.");
+            } else if (g_freedomCryLastResult < 0) {
+                ImGui::TextDisabled("Last Freedom Cry add failed.");
             }
             ImGui::EndTabItem();
         }
@@ -3665,19 +4155,16 @@ void DrawMenu() {
                 DrawInfoRow("Disable hotkeys on UI open", g_disableHotkeysWhileUiOpen ? "enabled" : "disabled");
                 DrawInfoRow("Input captured", g_inputCaptured ? "yes" : "no");
                 DrawInfoRowf("Inventory base", "0x%08X", static_cast<unsigned int>(g_inventoryBase));
-                DrawInfoRowf("Inventory pointer writes", "%d", g_inventoryPointerLastWrites);
+                DrawInfoRowf("Inventory refill writes", "%d", g_inventoryPointerLastWrites);
                 DrawInfoRowf("Unlock entries", "%d total", kUnlockEntryCount);
                 DrawInfoRowf("Unlock queue", "%d pending", CountEnabledUnlocks());
-                DrawInfoRowf("Unlocks done this session", "%d", g_unlockPistolsPatched);
-                DrawInfoRowf("Unlock records found", "%d last pass", g_unlockPistolsFound);
+                DrawInfoRowf("Unlocks done this session", "%d", g_unlockRecordsPatched);
+                DrawInfoRowf("Unlock records found", "%d last pass", g_unlockRecordsFound);
                 DrawInfoRow("Unlock scan", g_unlockScanRunning != 0 ? "running" : "idle");
                 DrawInfoRow("Community completion", g_finishCommunityChallengesForUnlocks ? "enabled" : "disabled");
                 DrawInfoRow("Global hidden unlocks", g_globalHiddenUnlockInstalled ? "installed" : "not installed");
                 DrawInfoRowf("TimeScale interval", "%d", g_timeScaleInterval);
-                DrawInfoRowf("Last inventory item", "id=0x%02X original=%d applied=%d",
-                             g_inventoryLastItemId,
-                             g_inventoryLastOriginalValue,
-                             g_inventoryLastAppliedValue);
+                DrawInfoRow("Free Cam", g_freeCamActive ? "active" : (g_freeCamEnabled ? "waiting" : (g_freeCamHooksInstalled ? "installed" : "not installed")));
                 ImGui::EndTable();
             }
 
@@ -3700,13 +4187,13 @@ void DrawMenu() {
                 DrawPatchRow("Infinite Breath", g_infiniteBreathPatchReady, "0x01148936", g_infiniteBreathHits);
                 DrawPatchRow("Stealth Mode", g_stealthModePatchReady, "0x0101CB66");
                 DrawPatchRow("No Reload", g_noReloadPatchReady, "0x016B8A96", g_noReloadHits);
+                DrawPatchRow("Lock Consumables", g_lockConsumablesPatchReady, "0x011A1F6D", g_lockConsumablesHits);
+                DrawPatchRow("Inventory Pointer", g_inventoryPointerPatchReady, "0x01CFD381", g_inventoryPointerHits);
                 DrawPatchRow("Mission Timer", g_missionTimerPatchReady, "0x019446C3", g_missionTimerHits);
                 DrawPatchRow("Mission Timer II", g_missionTimer2PatchReady, "0x016869B7", g_missionTimer2Hits);
-                DrawPatchRow("Inventory Pointer", g_inventoryPointerPatchReady, "0x01CFD381", g_inventoryPointerHits);
-                DrawPatchRow("Inventory Set", g_inventorySetPatchReady, "0x011A1F3D", g_inventorySetHits);
-                DrawPatchRow("Inventory Set Alt", g_inventorySetAltPatchReady, "0x011A1F6F", g_inventorySetAltHits);
-                DrawPatchRow("Inventory Subtract", g_inventoryEntrySubtractPatchReady, "0x011A1FA3", g_inventoryEntrySubtractHits);
                 DrawPatchRow("Noclip Update", g_noclipPatchReady, "0x016FAACD", g_noclipUpdateHits);
+                DrawPatchRow("Free Cam Transform", g_freeCamHooksInstalled, "lazy AOB", g_freeCamTransformHits);
+                DrawPatchRow("Free Cam Camera", g_freeCamHooksInstalled, "lazy AOB", g_freeCamCameraHits);
                 ImGui::EndTable();
             }
             ImGui::EndTabItem();
@@ -3745,9 +4232,10 @@ HRESULT __stdcall HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT
             ReleaseMenuInputState();
         }
         UpdateMouseWindowLock();
-        MaintainInventoryPointerValues();
         ProcessHotkeys();
-
+        if (g_freeCamEnabled) {
+            UpdateFreeCam();
+        }
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGuiIO& io = ImGui::GetIO();
@@ -3847,15 +4335,20 @@ HRESULT __stdcall HookGetDeviceState(IDirectInputDevice8A* device, DWORD dataSiz
         return DIERR_NOTINITIALIZED;
     }
     const HRESULT result = original(device, dataSize, data);
-    if (SUCCEEDED(result) && g_menuOpen && data && dataSize > 0) {
+    if (SUCCEEDED(result) && data && dataSize > 0) {
         const bool isMouse = IsMouseDevice(device);
-        if (IsMouseInputCaptureActive() && isMouse) {
-            memset(data, 0, dataSize);
-            return DI_OK;
+        if (g_menuOpen) {
+            if (IsMouseInputCaptureActive() && isMouse) {
+                memset(data, 0, dataSize);
+                return DI_OK;
+            }
+            if (IsKeyboardInputCaptureActive() && !isMouse) {
+                memset(data, 0, dataSize);
+                return DI_OK;
+            }
         }
-        if (IsKeyboardInputCaptureActive() && !isMouse) {
-            memset(data, 0, dataSize);
-            return DI_OK;
+        if (isMouse) {
+            ApplyFreeCamMouseLookScale(data, dataSize);
         }
     }
     return result;
@@ -3878,15 +4371,20 @@ HRESULT __stdcall HookGetDeviceData(IDirectInputDevice8A* device,
         return DIERR_NOTINITIALIZED;
     }
     const HRESULT result = original(device, objectDataSize, objectData, inOut, flags);
-    if (SUCCEEDED(result) && g_menuOpen && inOut) {
+    if (SUCCEEDED(result) && inOut) {
         const bool isMouse = IsMouseDevice(device);
-        if (IsMouseInputCaptureActive() && isMouse) {
-            *inOut = 0;
-            return DI_OK;
+        if (g_menuOpen) {
+            if (IsMouseInputCaptureActive() && isMouse) {
+                *inOut = 0;
+                return DI_OK;
+            }
+            if (IsKeyboardInputCaptureActive() && !isMouse) {
+                *inOut = 0;
+                return DI_OK;
+            }
         }
-        if (IsKeyboardInputCaptureActive() && !isMouse) {
-            *inOut = 0;
-            return DI_OK;
+        if (isMouse && objectData && *inOut > 0) {
+            ApplyFreeCamMouseLookScale(objectData, *inOut);
         }
     }
     return result;
@@ -4056,7 +4554,7 @@ void InitConsole() {
     if (!AllocConsole()) {
         return;
     }
-    SetConsoleTitleA("AC4Tools v1.01 Log");
+    SetConsoleTitleA("AC4Tools v1.02 Log");
     freopen_s(&g_consoleOut, "CONOUT$", "w", stdout);
     FILE* consoleErr = nullptr;
     freopen_s(&consoleErr, "CONOUT$", "w", stderr);
