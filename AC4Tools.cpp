@@ -119,6 +119,39 @@ constexpr std::uint8_t kEagleVisionSprintPattern[] = {
 constexpr std::uint8_t kOriginalEagleVisionSprintByte = 0x74;
 constexpr std::uint8_t kEnabledEagleVisionSprintByte = 0xEB;
 
+constexpr std::uint8_t kCivilianDesyncPattern1[] = {
+    0xF3, 0x0F, 0x10, 0x80, 0xD0, 0x03, 0x00, 0x00, 0x51,
+    0x8D, 0x8E, 0xD0, 0x00, 0x00, 0x00, 0xF3, 0x0F, 0x11,
+    0x04, 0x24, 0xE8, 0xA6, 0xF8, 0xA0, 0xFE, 0xF3, 0x0F,
+    0x10, 0x05, 0x4C, 0xE9, 0x70, 0x02, 0x6A, 0x00, 0x6A,
+    0x00, 0x51, 0x8B, 0x0D, 0x48, 0x6D, 0xDE, 0x04, 0x81,
+    0xC1, 0xEC,
+};
+constexpr std::uint8_t kCivilianDesyncPattern2[] = {
+    0xF3, 0x0F, 0x10, 0x80, 0xD0, 0x03, 0x00, 0x00, 0x51,
+    0x8D, 0x8E, 0xD0, 0x00, 0x00, 0x00, 0xF3, 0x0F, 0x11,
+    0x04, 0x24, 0xE8, 0x7F, 0xF5, 0xA0, 0xFE, 0xF3, 0x0F,
+    0x10, 0x05, 0x4C, 0xE9, 0x70, 0x02, 0x6A, 0x00, 0x6A,
+    0x00, 0x51, 0x8B, 0x0D, 0x48, 0x6D, 0xDE, 0x04, 0x81,
+    0xC1, 0xF4,
+};
+constexpr std::uint8_t kOriginalCivilianDesyncBytes[] = {
+    0xF3, 0x0F, 0x10, 0x80, 0xD0, 0x03, 0x00, 0x00,
+};
+constexpr std::uint8_t kEnabledCivilianDesyncBytes[] = {
+    0x0F, 0x57, 0xC0, 0x90, 0x90, 0x90, 0x90, 0x90,
+};
+constexpr std::size_t kCivilianWarningCallOffset = 0x38;
+constexpr std::uint8_t kOriginalCivilianWarningCall1Bytes[] = {
+    0xE8, 0x72, 0xB9, 0x5A, 0xFF,
+};
+constexpr std::uint8_t kOriginalCivilianWarningCall2Bytes[] = {
+    0xE8, 0x4B, 0xB6, 0x5A, 0xFF,
+};
+constexpr std::uint8_t kDisabledCivilianWarningCallBytes[] = {
+    0x90, 0x90, 0x90, 0x90, 0x90,
+};
+
 constexpr std::uintptr_t kPatchNoclipUpdateAddress = 0x016FAACD;
 constexpr std::uintptr_t kPatchNoclipUpdateReturnAddress = 0x016FAAD3;
 constexpr std::uint8_t kOriginalNoclipUpdateBytes[] = {
@@ -175,6 +208,7 @@ bool g_stealthMode = false;
 bool g_noReload = false;
 bool g_noFallDamage = false;
 bool g_eagleVisionSprint = false;
+bool g_killCiviliansNoDesync = false;
 bool g_lockConsumables = false;
 bool g_freezeMissionTimer = false;
 bool g_timeScaleEnabled = false;
@@ -224,6 +258,8 @@ std::uint8_t* g_noReloadCave = nullptr;
 std::uint8_t* g_noFallDamageCave = nullptr;
 std::uint8_t* g_fallDamageAddress = nullptr;
 std::uint8_t* g_eagleVisionSprintAddress = nullptr;
+std::uint8_t* g_civilianDesyncAddress1 = nullptr;
+std::uint8_t* g_civilianDesyncAddress2 = nullptr;
 std::uint8_t* g_lockConsumablesCave = nullptr;
 std::uint8_t* g_inventoryPointerCave = nullptr;
 std::uint8_t* g_missionTimerCave = nullptr;
@@ -266,6 +302,7 @@ bool g_stealthModePatchReady = false;
 bool g_noReloadPatchReady = false;
 bool g_noFallDamagePatchReady = false;
 bool g_eagleVisionSprintPatchReady = false;
+bool g_killCiviliansNoDesyncPatchReady = false;
 bool g_lockConsumablesPatchReady = false;
 bool g_lockConsumablesHotkeyReady = true;
 bool g_lockConsumablesInstallFailed = false;
@@ -331,6 +368,7 @@ bool InstallFreeCamPatch();
 void ApplyNoCannonCooldownPatch();
 void ApplyStealthModePatch();
 void ApplyEagleVisionSprintPatch();
+void ApplyKillCiviliansNoDesyncPatch();
 
 struct ToggleAction {
     const char* id;
@@ -383,6 +421,10 @@ void AfterEagleVisionSprintToggle() {
     ApplyEagleVisionSprintPatch();
 }
 
+void AfterKillCiviliansNoDesyncToggle() {
+    ApplyKillCiviliansNoDesyncPatch();
+}
+
 ToggleAction g_actions[] = {
     {"ShipGodmode", "Ship Godmode", &g_enabled, &g_shipPatchReady, 0, nullptr},
     {"NoCannonCooldown", "No Cannon Cooldown", &g_noCannonCooldown, &g_noCannonCooldownPatchReady, 0, &AfterNoCannonCooldownToggle},
@@ -393,6 +435,7 @@ ToggleAction g_actions[] = {
     {"NoReload", "No Reload", &g_noReload, &g_noReloadPatchReady, 0, nullptr},
     {"NoFallDamage", "No Fall Damage", &g_noFallDamage, &g_noFallDamagePatchReady, 0, nullptr},
     {"EagleVisionSprint", "Allow Eagle Vision while sprinting", &g_eagleVisionSprint, &g_eagleVisionSprintPatchReady, 0, &AfterEagleVisionSprintToggle},
+    {"KillCiviliansNoDesync", "Kill civilians without desynchronization", &g_killCiviliansNoDesync, &g_killCiviliansNoDesyncPatchReady, 0, &AfterKillCiviliansNoDesyncToggle},
     {"LockConsumables", "Lock Consumables", &g_lockConsumables, &g_lockConsumablesHotkeyReady, 0, &AfterLockConsumablesToggle},
     {"FreezeMissionTimer", "Freeze Mission Timer", &g_freezeMissionTimer, &g_missionTimersPatchReady, 0, nullptr},
     {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, &AfterNoclipToggle},
@@ -936,6 +979,60 @@ void ApplyEagleVisionSprintPatch() {
         g_eagleVisionSprint = false;
         g_eagleVisionSprintPatchReady = false;
         Log("Allow Eagle Vision while sprinting disabled: failed to write patch byte.");
+    }
+}
+
+void ApplyKillCiviliansNoDesyncPatch() {
+    if (!g_killCiviliansNoDesyncPatchReady ||
+        !g_civilianDesyncAddress1 ||
+        !g_civilianDesyncAddress2) {
+        g_killCiviliansNoDesync = false;
+        return;
+    }
+
+    const auto* desired = g_killCiviliansNoDesync ? kEnabledCivilianDesyncBytes : kOriginalCivilianDesyncBytes;
+    const auto* desiredWarningCall1 = g_killCiviliansNoDesync
+        ? kDisabledCivilianWarningCallBytes
+        : kOriginalCivilianWarningCall1Bytes;
+    const auto* desiredWarningCall2 = g_killCiviliansNoDesync
+        ? kDisabledCivilianWarningCallBytes
+        : kOriginalCivilianWarningCall2Bytes;
+    auto* warningCallAddress1 = g_civilianDesyncAddress1 + kCivilianWarningCallOffset;
+    auto* warningCallAddress2 = g_civilianDesyncAddress2 + kCivilianWarningCallOffset;
+
+    if (BytesMatch(g_civilianDesyncAddress1, desired, sizeof(kOriginalCivilianDesyncBytes)) &&
+        BytesMatch(g_civilianDesyncAddress2, desired, sizeof(kOriginalCivilianDesyncBytes)) &&
+        BytesMatch(warningCallAddress1, desiredWarningCall1, sizeof(kOriginalCivilianWarningCall1Bytes)) &&
+        BytesMatch(warningCallAddress2, desiredWarningCall2, sizeof(kOriginalCivilianWarningCall2Bytes))) {
+        return;
+    }
+
+    const bool site1Known =
+        BytesMatch(g_civilianDesyncAddress1, kOriginalCivilianDesyncBytes, sizeof(kOriginalCivilianDesyncBytes)) ||
+        BytesMatch(g_civilianDesyncAddress1, kEnabledCivilianDesyncBytes, sizeof(kEnabledCivilianDesyncBytes));
+    const bool site2Known =
+        BytesMatch(g_civilianDesyncAddress2, kOriginalCivilianDesyncBytes, sizeof(kOriginalCivilianDesyncBytes)) ||
+        BytesMatch(g_civilianDesyncAddress2, kEnabledCivilianDesyncBytes, sizeof(kEnabledCivilianDesyncBytes));
+    const bool warningCall1Known =
+        BytesMatch(warningCallAddress1, kOriginalCivilianWarningCall1Bytes, sizeof(kOriginalCivilianWarningCall1Bytes)) ||
+        BytesMatch(warningCallAddress1, kDisabledCivilianWarningCallBytes, sizeof(kDisabledCivilianWarningCallBytes));
+    const bool warningCall2Known =
+        BytesMatch(warningCallAddress2, kOriginalCivilianWarningCall2Bytes, sizeof(kOriginalCivilianWarningCall2Bytes)) ||
+        BytesMatch(warningCallAddress2, kDisabledCivilianWarningCallBytes, sizeof(kDisabledCivilianWarningCallBytes));
+    if (!site1Known || !site2Known || !warningCall1Known || !warningCall2Known) {
+        g_killCiviliansNoDesync = false;
+        g_killCiviliansNoDesyncPatchReady = false;
+        Log("Kill civilians without desynchronization disabled: patch bytes changed unexpectedly.");
+        return;
+    }
+
+    if (!WriteMemory(g_civilianDesyncAddress1, desired, sizeof(kOriginalCivilianDesyncBytes)) ||
+        !WriteMemory(g_civilianDesyncAddress2, desired, sizeof(kOriginalCivilianDesyncBytes)) ||
+        !WriteMemory(warningCallAddress1, desiredWarningCall1, sizeof(kOriginalCivilianWarningCall1Bytes)) ||
+        !WriteMemory(warningCallAddress2, desiredWarningCall2, sizeof(kOriginalCivilianWarningCall2Bytes))) {
+        g_killCiviliansNoDesync = false;
+        g_killCiviliansNoDesyncPatchReady = false;
+        Log("Kill civilians without desynchronization disabled: failed to write patch bytes.");
     }
 }
 
@@ -2735,6 +2832,54 @@ bool InstallEagleVisionSprintPatch() {
     return true;
 }
 
+bool InstallKillCiviliansNoDesyncPatch() {
+    auto* patchAddress1 = FindMainModulePattern(kCivilianDesyncPattern1, sizeof(kCivilianDesyncPattern1));
+    auto* patchAddress2 = FindMainModulePattern(kCivilianDesyncPattern2, sizeof(kCivilianDesyncPattern2));
+    if (!patchAddress1 || !patchAddress2) {
+        Log("Refusing Kill civilians without desynchronization patch: one or more AOBs were not found.");
+        return false;
+    }
+    if (!BytesMatch(patchAddress1, kOriginalCivilianDesyncBytes, sizeof(kOriginalCivilianDesyncBytes))) {
+        LogPatchMismatch("Kill civilians without desynchronization patch site 1",
+                         patchAddress1,
+                         kOriginalCivilianDesyncBytes,
+                         sizeof(kOriginalCivilianDesyncBytes));
+        return false;
+    }
+    if (!BytesMatch(patchAddress2, kOriginalCivilianDesyncBytes, sizeof(kOriginalCivilianDesyncBytes))) {
+        LogPatchMismatch("Kill civilians without desynchronization patch site 2",
+                         patchAddress2,
+                         kOriginalCivilianDesyncBytes,
+                         sizeof(kOriginalCivilianDesyncBytes));
+        return false;
+    }
+    if (!BytesMatch(patchAddress1 + kCivilianWarningCallOffset,
+                    kOriginalCivilianWarningCall1Bytes,
+                    sizeof(kOriginalCivilianWarningCall1Bytes))) {
+        LogPatchMismatch("Kill civilians without desynchronization warning call site 1",
+                         patchAddress1 + kCivilianWarningCallOffset,
+                         kOriginalCivilianWarningCall1Bytes,
+                         sizeof(kOriginalCivilianWarningCall1Bytes));
+        return false;
+    }
+    if (!BytesMatch(patchAddress2 + kCivilianWarningCallOffset,
+                    kOriginalCivilianWarningCall2Bytes,
+                    sizeof(kOriginalCivilianWarningCall2Bytes))) {
+        LogPatchMismatch("Kill civilians without desynchronization warning call site 2",
+                         patchAddress2 + kCivilianWarningCallOffset,
+                         kOriginalCivilianWarningCall2Bytes,
+                         sizeof(kOriginalCivilianWarningCall2Bytes));
+        return false;
+    }
+
+    g_civilianDesyncAddress1 = patchAddress1;
+    g_civilianDesyncAddress2 = patchAddress2;
+    Logf("Kill civilians without desynchronization patch ready at 0x%08X and 0x%08X.",
+         static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(patchAddress1)),
+         static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(patchAddress2)));
+    return true;
+}
+
 bool InstallLockConsumablesPatch() {
     if (g_lockConsumablesPatchReady) {
         return true;
@@ -3388,6 +3533,7 @@ bool InstallPatches() {
     g_noReloadPatchReady = InstallNoReloadPatch();
     g_noFallDamagePatchReady = InstallNoFallDamagePatch();
     g_eagleVisionSprintPatchReady = InstallEagleVisionSprintPatch();
+    g_killCiviliansNoDesyncPatchReady = InstallKillCiviliansNoDesyncPatch();
     g_missionTimerPatchReady = InstallMissionTimerPatch();
     g_missionTimer2PatchReady = InstallMissionTimer2Patch();
     g_missionTimersPatchReady = g_missionTimerPatchReady || g_missionTimer2PatchReady;
@@ -3424,6 +3570,9 @@ bool InstallPatches() {
     if (!g_eagleVisionSprintPatchReady) {
         g_eagleVisionSprint = false;
     }
+    if (!g_killCiviliansNoDesyncPatchReady) {
+        g_killCiviliansNoDesync = false;
+    }
     if (!g_missionTimersPatchReady) {
         g_freezeMissionTimer = false;
     }
@@ -3441,6 +3590,7 @@ bool InstallPatches() {
         !g_noReloadPatchReady &&
         !g_noFallDamagePatchReady &&
         !g_eagleVisionSprintPatchReady &&
+        !g_killCiviliansNoDesyncPatchReady &&
         !g_missionTimersPatchReady &&
         !g_inventoryPointerPatchReady &&
         !g_noclipPatchReady) {
@@ -3448,7 +3598,7 @@ bool InstallPatches() {
         return false;
     }
     g_installed = true;
-    Logf("AC4Tools standalone patches installed: ship=%d cannonCooldown=%d allyGodmode=%d timescale=%d player=%d breath=%d stealth=%d noReload=%d noFallDamage=%d eagleVisionSprint=%d timers=%d lockConsumables=%d inventoryPointer=%d noclip=%d.",
+    Logf("AC4Tools standalone patches installed: ship=%d cannonCooldown=%d allyGodmode=%d timescale=%d player=%d breath=%d stealth=%d noReload=%d noFallDamage=%d eagleVisionSprint=%d civilianNoDesync=%d timers=%d lockConsumables=%d inventoryPointer=%d noclip=%d.",
          g_shipPatchReady ? 1 : 0,
          g_noCannonCooldownPatchReady ? 1 : 0,
          g_allyGodmodePatchReady ? 1 : 0,
@@ -3459,6 +3609,7 @@ bool InstallPatches() {
          g_noReloadPatchReady ? 1 : 0,
          g_noFallDamagePatchReady ? 1 : 0,
          g_eagleVisionSprintPatchReady ? 1 : 0,
+         g_killCiviliansNoDesyncPatchReady ? 1 : 0,
          g_missionTimersPatchReady ? 1 : 0,
          g_lockConsumablesPatchReady ? 1 : 0,
          g_inventoryPointerPatchReady ? 1 : 0,
@@ -3908,6 +4059,7 @@ void DrawMenu() {
                 g_noReloadPatchReady ||
                 g_noFallDamagePatchReady ||
                 g_eagleVisionSprintPatchReady ||
+                g_killCiviliansNoDesyncPatchReady ||
                 lockConsumablesCanBeTried ||
                 g_inventoryPointerPatchReady;
             if (!hasPlayerOptions) {
@@ -3956,6 +4108,17 @@ void DrawMenu() {
                     }
                 } else {
                     ImGui::TextDisabled("Allow Eagle Vision while sprinting unavailable");
+                }
+                if (g_killCiviliansNoDesyncPatchReady) {
+                    bool value = g_killCiviliansNoDesync;
+                    if (ImGui::Checkbox("Kill civilians without desynchronization", &value)) {
+                        g_killCiviliansNoDesync = value;
+                        ApplyKillCiviliansNoDesyncPatch();
+                        Log(g_killCiviliansNoDesync ? "Kill civilians without desynchronization enabled." :
+                                                       "Kill civilians without desynchronization disabled.");
+                    }
+                } else {
+                    ImGui::TextDisabled("Kill civilians without desynchronization unavailable");
                 }
 
                 ImGui::NextColumn();
@@ -4399,6 +4562,7 @@ void DrawMenu() {
                 DrawPatchRow("No Reload", g_noReloadPatchReady, "0x016B8A96", g_noReloadHits);
                 DrawPatchRow("No Fall Damage", g_noFallDamagePatchReady, "AOB", g_noFallDamageHits);
                 DrawPatchRow("Eagle Vision Sprint", g_eagleVisionSprintPatchReady, "AOB");
+                DrawPatchRow("Civilian No Desync", g_killCiviliansNoDesyncPatchReady, "AOB");
                 DrawPatchRow("Lock Consumables", g_lockConsumablesPatchReady, "0x011A1F6D", g_lockConsumablesHits);
                 DrawPatchRow("Inventory Pointer", g_inventoryPointerPatchReady, "0x01CFD381", g_inventoryPointerHits);
                 DrawPatchRow("Mission Timer", g_missionTimerPatchReady, "0x019446C3", g_missionTimerHits);
@@ -4797,6 +4961,7 @@ DWORD WINAPI MainThread(void*) {
         ApplyNoCannonCooldownPatch();
         ApplyStealthModePatch();
         ApplyEagleVisionSprintPatch();
+        ApplyKillCiviliansNoDesyncPatch();
         MaintainUnlocks();
     }
     return 0;
