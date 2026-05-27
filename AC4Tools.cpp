@@ -3734,7 +3734,15 @@ void DrawMenu() {
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Player")) {
-            if (!g_playerHealthPatchReady && !g_infiniteBreathPatchReady && !g_noReloadPatchReady && !g_lockConsumablesPatchReady) {
+            const bool lockConsumablesCanBeTried = !g_lockConsumablesInstallFailed;
+            const bool hasPlayerOptions =
+                g_playerHealthPatchReady ||
+                g_infiniteBreathPatchReady ||
+                g_stealthModePatchReady ||
+                g_noReloadPatchReady ||
+                lockConsumablesCanBeTried ||
+                g_inventoryPointerPatchReady;
+            if (!hasPlayerOptions) {
                 ImGui::TextDisabled("Player options unavailable: hooks were not installed.");
             } else {
                 ImGui::Columns(2, "PlayerColumns", false);
