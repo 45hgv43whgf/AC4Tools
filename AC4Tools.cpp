@@ -4457,6 +4457,12 @@ void DrawMenu() {
                 if (ImGui::Button("Refill to custom amount")) {
                     g_inventoryCustomRefillSelected = g_inventoryRefillSelected;
                     g_inventoryCustomRefillAmount = selectedRefill.value;
+                    const ImVec2 windowPos = ImGui::GetWindowPos();
+                    const ImVec2 windowSize = ImGui::GetWindowSize();
+                    ImGui::SetNextWindowPos(ImVec2(windowPos.x + windowSize.x * 0.5f,
+                                                   windowPos.y + windowSize.y * 0.5f),
+                                            ImGuiCond_Appearing,
+                                            ImVec2(0.5f, 0.5f));
                     ImGui::OpenPopup("Custom Refill Amount");
                 }
                 if (!g_inventoryPointerPatchReady || g_inventoryBase == 0) {
