@@ -297,6 +297,9 @@ std::uintptr_t g_freeCamCamera = 0;
 int g_inventoryPointerLastWrites = 0;
 int g_inventoryRefillSelected = 0;
 int g_inventoryRefillLastResult = 0;
+int g_inventoryCustomRefillSelected = 0;
+int g_inventoryCustomRefillAmount = 0;
+bool g_inventoryRefillsAreSetters = false;
 int g_freedomCryLastResult = 0;
 int g_unlockRecordsFound = 0;
 int g_unlockRecordsPatched = 0;
@@ -1263,7 +1266,7 @@ void InitGameInfo() {
     }
 }
 
-bool WriteInventoryValueByOffset(std::uintptr_t itemOffset, int value) {
+bool WriteInventoryValueByOffset(std::uintptr_t itemOffset, int value, bool forceSet) {
     if (!g_inventoryBase) {
         return false;
     }
@@ -1281,7 +1284,7 @@ bool WriteInventoryValueByOffset(std::uintptr_t itemOffset, int value) {
         }
 
         auto* amount = reinterpret_cast<int*>(item + 0x0C);
-        if (*amount < value) {
+        if (forceSet || *amount < value) {
             *amount = value;
             ++g_inventoryPointerLastWrites;
         }
@@ -1330,12 +1333,39 @@ bool RefillSelectedInventoryEntry() {
     }
 
     const InventoryRefillEntry& entry = g_inventoryRefillEntries[g_inventoryRefillSelected];
-    const bool ok = WriteInventoryValueByOffset(entry.offset, entry.value);
+    const bool ok = WriteInventoryValueByOffset(entry.offset, entry.value, g_inventoryRefillsAreSetters);
     g_inventoryRefillLastResult = ok ? 1 : -1;
     if (ok) {
-        Logf("Refilled %s to %d via inventory pointer.", entry.name, entry.value);
+        Logf("%s %s to %d via inventory pointer.",
+             g_inventoryRefillsAreSetters ? "Set" : "Refilled",
+             entry.name,
+             entry.value);
     } else {
         Logf("Refill failed for %s: inventory pointer is not ready.", entry.name);
+    }
+    return ok;
+}
+
+bool RefillInventoryEntryToAmount(int entryIndex, int value) {
+    if (entryIndex < 0 || entryIndex >= kInventoryRefillEntryCount) {
+        g_inventoryRefillLastResult = -1;
+        return false;
+    }
+
+    if (value < 0) {
+        value = 0;
+    }
+
+    const InventoryRefillEntry& entry = g_inventoryRefillEntries[entryIndex];
+    const bool ok = WriteInventoryValueByOffset(entry.offset, value, g_inventoryRefillsAreSetters);
+    g_inventoryRefillLastResult = ok ? 1 : -1;
+    if (ok) {
+        Logf("%s %s to custom amount %d via inventory pointer.",
+             g_inventoryRefillsAreSetters ? "Set" : "Refilled",
+             entry.name,
+             value);
+    } else {
+        Logf("Custom refill failed for %s: inventory pointer is not ready.", entry.name);
     }
     return ok;
 }
@@ -4389,7 +4419,13 @@ void DrawMenu() {
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::TextUnformatted("One-time Inventory Refill");
-                ImGui::TextWrapped("Choose one resource/ammo type and refill it once to the old preset value.");
+                ImGui::TextWrapped("Choose one resource/ammo type and refill it once to the preset or custom amount.");
+                ImGui::Checkbox("Turn Refills into a Setter", &g_inventoryRefillsAreSetters);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "When enabled, preset and custom refills write the exact amount.\n"
+                        "When disabled, they only raise values that are below the target.");
+                }
                 if (g_inventoryRefillSelected < 0 || g_inventoryRefillSelected >= kInventoryRefillEntryCount) {
                     g_inventoryRefillSelected = 0;
                 }
@@ -4401,6 +4437,7 @@ void DrawMenu() {
                         if (ImGui::Selectable(g_inventoryRefillEntries[i].name, selected)) {
                             g_inventoryRefillSelected = i;
                             g_inventoryRefillLastResult = 0;
+                            g_inventoryCustomRefillAmount = g_inventoryRefillEntries[i].value;
                         }
                         if (selected) {
                             ImGui::SetItemDefaultFocus();
@@ -4417,9 +4454,47 @@ void DrawMenu() {
                 if (ImGui::Button(refillButton)) {
                     RefillSelectedInventoryEntry();
                 }
+                if (ImGui::Button("Refill to custom amount")) {
+                    g_inventoryCustomRefillSelected = g_inventoryRefillSelected;
+                    g_inventoryCustomRefillAmount = selectedRefill.value;
+                    ImGui::OpenPopup("Custom Refill Amount");
+                }
                 if (!g_inventoryPointerPatchReady || g_inventoryBase == 0) {
                     ImGui::EndDisabled();
                     ImGui::TextDisabled("Inventory pointer not ready yet; load a save and open inventory/ship menus first.");
+                }
+                if (ImGui::BeginPopupModal("Custom Refill Amount", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                    if (g_inventoryCustomRefillSelected < 0 ||
+                        g_inventoryCustomRefillSelected >= kInventoryRefillEntryCount) {
+                        g_inventoryCustomRefillSelected = g_inventoryRefillSelected;
+                    }
+                    const InventoryRefillEntry& customRefill =
+                        g_inventoryRefillEntries[g_inventoryCustomRefillSelected];
+
+                    ImGui::Text("Refill %s to:", customRefill.name);
+                    ImGui::SetNextItemWidth(180.0f);
+                    if (ImGui::InputInt("##CustomRefillAmount", &g_inventoryCustomRefillAmount)) {
+                        if (g_inventoryCustomRefillAmount < 0) {
+                            g_inventoryCustomRefillAmount = 0;
+                        }
+                    }
+                    ImGui::Spacing();
+                    if (!g_inventoryPointerPatchReady || g_inventoryBase == 0) {
+                        ImGui::BeginDisabled();
+                    }
+                    if (ImGui::Button("Refill now")) {
+                        RefillInventoryEntryToAmount(g_inventoryCustomRefillSelected,
+                                                     g_inventoryCustomRefillAmount);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (!g_inventoryPointerPatchReady || g_inventoryBase == 0) {
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Cancel")) {
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
                 }
                 if (g_inventoryRefillLastResult > 0) {
                     ImGui::TextDisabled("Last refill succeeded.");

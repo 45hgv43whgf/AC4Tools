@@ -37,7 +37,7 @@ echo AC4Tools v1.03
  echo.
  echo Current feature tabs:
  echo - Ship: Ship Godmode, Ally Godmode, No Cannon Cooldown.
- echo - Player: Player Godmode, Desynchronize yourself, Infinite Breath, Stealth Mode, No Reload, No Fall Damage, Allow Eagle Vision while sprinting, Kill civilians without desynchronization ^(also suppresses the warning^), Lock Consumables ^(incl Ship Ammo^), One-time Inventory Refill, Freeze Mission Timer.
+ echo - Player: Player Godmode, Desynchronize yourself, Infinite Breath, Stealth Mode, No Reload, No Fall Damage, Allow Eagle Vision while sprinting, Kill civilians without desynchronization ^(also suppresses the warning^), Show collectibles, Lock Consumables ^(incl Ship Ammo^), One-time Inventory Refill, Freeze Mission Timer.
  echo - Noclip: configurable speed and boost speed.
  echo - Game: Time Scale and Free Cam.
  echo - Freedom Cry: add 100 Liberated Slaves or 100 Recruited Maroons to the Freedom Cry resistance counters.
@@ -57,7 +57,8 @@ echo AC4Tools v1.03
  echo - Movement, boost, and exit keys are configurable in the Hotkeys tab under Free Cam Control Hotkeys.
  echo.
  echo One-time Inventory Refill:
- echo - Choose one resource/ammo type from the dropdown and click the dynamic Refill button.
+ echo - Choose one resource/ammo type from the dropdown and click the dynamic preset Refill button, or open the custom refill popup and enter your own amount.
+ echo - Optional setter mode writes the exact amount instead of only raising lower values.
  echo - Uses the previous preset values: Money 999999; Ship Crew 40; Mortar Shot Ammo 15; Heavy Shot Ammo 25; Fire Barrels 25; Sugar/Rum/Wood/Cloth/Metal 2500; Bullets 30; Smoke Bombs/Sleep Darts/Berserk Darts/Rope Darts/Firecrackers/Blunderbuss 15; Throwing Knives 1; Harpoons 40.
  echo - If the button is disabled, load a save and open an inventory or ship menu first.
  echo.

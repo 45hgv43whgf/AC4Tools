@@ -39,7 +39,7 @@ Other game builds may use different code addresses or bytes. If a supported patc
 - Kill civilians without desynchronization: also suppresses the related on-screen warning while enabled
 - Show collectibles
 - Lock Consumables (incl Ship Ammo): prevents the shared consumable decrement from lowering values while enabled. This covers player consumables and ship ammunition through one shared hook. Enable it after the save is fully loaded.
-- One-time Inventory Refill: choose one resource/ammo type from a dropdown and refill it once to its preset value
+- One-time Inventory Refill: choose one resource/ammo type from a dropdown and refill it once to its preset or a custom amount. Optional setter mode writes the exact amount instead of only raising lower values.
 - Freeze Mission Timer
 
 ### One-Time Refill Presets
@@ -97,7 +97,7 @@ Unlocks can irreversibly softlock your save if an unlocked item was supposed to 
 
 `Free Cam` installs its camera hooks only when enabled from the Game tab or its assigned hotkey. Use the mouse to aim. Default controls are `Num8`/`Num2` for forward/back, `Num4`/`Num6` to strafe, `Num7`/`Num9` to move up/down, hold `Shift` to speed up, and press `F10` to exit. Movement, boost, and exit keys can be changed in the Hotkeys tab under `Free Cam Control Hotkeys`. `Free Cam Look Speed` scales mouse-look sensitivity while Free Cam is enabled.
 
-If the `One-time Inventory Refill` button is disabled, load a save and open an inventory or ship menu first.
+If the `One-time Inventory Refill` buttons are disabled, load a save and open an inventory or ship menu first.
 
 If the `Freedom Cry` buttons are disabled, load Freedom Cry and open an inventory or ship menu first.
 
