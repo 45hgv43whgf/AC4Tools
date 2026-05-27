@@ -4,7 +4,7 @@ AC4Tools is a standalone ASI plugin for **Assassin's Creed IV Black Flag**.
 
 It adds an in-game ImGui menu with ship, player, consumable lock, one-time inventory refills, unlocks, Freedom Cry helpers, noclip, time scale, input/system, and hotkey options. The plugin is intended to be loaded through Ultimate ASI Loader.
 
-Current version: **v1.03**
+Current version: **v1.04**
 
 ## Game Version
 
