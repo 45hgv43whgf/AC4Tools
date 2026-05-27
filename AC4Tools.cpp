@@ -65,6 +65,7 @@ constexpr std::uint8_t kOriginalTimeIntervalBytes[] = {
 
 constexpr std::uintptr_t kPatchPlayerHealthAddress = 0x0115AD07;
 constexpr std::uintptr_t kPatchPlayerHealthReturnAddress = 0x0115AD0D;
+constexpr std::uintptr_t kSetPlayerHealthAddress = 0x0115ACC0;
 constexpr std::uint8_t kOriginalPlayerHealthBytes[] = {
     0x66, 0x89, 0x46, 0x5C, 0x85, 0xFF,
 };
@@ -270,6 +271,7 @@ std::uint8_t* g_freeCamCameraCave = nullptr;
 std::uint8_t* g_freeCamTransformAddress = nullptr;
 std::uint8_t* g_freeCamCameraAddress = nullptr;
 std::uintptr_t g_freeCamRootStaticAddress = 0;
+std::uintptr_t g_playerHealthComponent = 0;
 std::uint8_t* g_globalHiddenUnlockWrite1Address = nullptr;
 std::uint8_t* g_globalHiddenUnlockWrite2Address = nullptr;
 std::uint8_t* g_globalHiddenUnlockVisibilityAddress = nullptr;
@@ -369,6 +371,7 @@ void ApplyNoCannonCooldownPatch();
 void ApplyStealthModePatch();
 void ApplyEagleVisionSprintPatch();
 void ApplyKillCiviliansNoDesyncPatch();
+void DesynchronizeYourself();
 
 struct ToggleAction {
     const char* id;
@@ -430,6 +433,7 @@ ToggleAction g_actions[] = {
     {"NoCannonCooldown", "No Cannon Cooldown", &g_noCannonCooldown, &g_noCannonCooldownPatchReady, 0, &AfterNoCannonCooldownToggle},
     {"AllyGodmode", "Ally Godmode", &g_allyGodmode, &g_allyGodmodePatchReady, 0, nullptr},
     {"PlayerGodmode", "Player Godmode", &g_playerGodmode, &g_playerHealthPatchReady, 0, nullptr},
+    {"DesynchronizeYourself", "Desynchronize yourself", nullptr, &g_playerHealthPatchReady, 0, &DesynchronizeYourself},
     {"InfiniteBreath", "Infinite Breath", &g_infiniteBreath, &g_infiniteBreathPatchReady, 0, nullptr},
     {"StealthMode", "Stealth Mode", &g_stealthMode, &g_stealthModePatchReady, 0, &AfterStealthModeToggle},
     {"NoReload", "No Reload", &g_noReload, &g_noReloadPatchReady, 0, nullptr},
@@ -1034,6 +1038,24 @@ void ApplyKillCiviliansNoDesyncPatch() {
         g_killCiviliansNoDesyncPatchReady = false;
         Log("Kill civilians without desynchronization disabled: failed to write patch bytes.");
     }
+}
+
+void DesynchronizeYourself() {
+    if (!g_playerHealthPatchReady || g_playerHealthComponent == 0) {
+        Log("Desynchronize yourself unavailable: player health component has not been captured yet.");
+        return;
+    }
+
+    using SetPlayerHealthFn = void(__thiscall*)(void*, int);
+    auto setPlayerHealth = reinterpret_cast<SetPlayerHealthFn>(kSetPlayerHealthAddress);
+
+    const bool restoreGodmode = g_playerGodmode;
+    g_playerGodmode = false;
+    setPlayerHealth(reinterpret_cast<void*>(g_playerHealthComponent), -1);
+    g_playerGodmode = restoreGodmode;
+
+    Logf("Desynchronize yourself triggered via player health component 0x%08X.",
+         static_cast<unsigned int>(g_playerHealthComponent));
 }
 
 void EmitJump(std::uint8_t*& p, std::uintptr_t target) {
@@ -2320,7 +2342,14 @@ void ToggleActionFromHotkey(int actionIndex) {
         return;
     }
     ToggleAction& action = g_actions[actionIndex];
-    if (!action.ready || !*action.ready || !action.value) {
+    if (!action.ready || !*action.ready) {
+        return;
+    }
+    if (!action.value) {
+        if (action.afterToggle) {
+            action.afterToggle();
+            Logf("%s triggered from hotkey %s.", action.label, HotkeyName(action.hotkey));
+        }
         return;
     }
     *action.value = !*action.value;
@@ -2626,6 +2655,12 @@ bool InstallPlayerHealthPatch() {
     *p++ = 0xFF;
     *p++ = 0x05;
     *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_playerHealthHits);
+    p += 4;
+
+    // mov [&g_playerHealthComponent], esi
+    *p++ = 0x89;
+    *p++ = 0x35;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_playerHealthComponent);
     p += 4;
 
     // cmp byte ptr [&g_playerGodmode], 0
@@ -3807,6 +3842,8 @@ void DrawHotkeysTab() {
             ImGui::TableSetColumnIndex(1);
             if (!available) {
                 ImGui::TextDisabled("Unavailable");
+            } else if (!action.value) {
+                ImGui::TextUnformatted("Action");
             } else {
                 ImGui::TextUnformatted(*action.value ? "On" : "Off");
             }
@@ -4182,6 +4219,22 @@ void DrawMenu() {
                 }
 
                 ImGui::Columns(1);
+
+                ImGui::Spacing();
+                ImGui::Spacing();
+                if (g_playerHealthPatchReady) {
+                    if (ImGui::Button("Desynchronize yourself")) {
+                        DesynchronizeYourself();
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("One-shot action to trigger player desynchronization.");
+                    }
+                    if (g_playerHealthComponent == 0) {
+                        ImGui::TextDisabled("Waiting for player health state");
+                    }
+                } else {
+                    ImGui::TextDisabled("Desynchronize yourself unavailable");
+                }
             }
             ImGui::EndTabItem();
         }

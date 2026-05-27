@@ -30,6 +30,7 @@ Other game builds may use different code addresses or bytes. If a supported patc
 ### Player
 
 - Player Godmode
+- Desynchronize yourself: one-shot action to trigger player desynchronization
 - Infinite Breath
 - Stealth Mode
 - No Reload
