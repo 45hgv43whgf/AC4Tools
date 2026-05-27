@@ -20,7 +20,7 @@ copy /y "%ASI_PATH%" "%RELEASE_SCRIPTS%\AC4Tools.asi" >nul
 copy /y "%PROJECT_DIR%AC4Tools.ini" "%RELEASE_SCRIPTS%\AC4Tools.ini" >nul
 
 (
-echo AC4Tools v1.02
+echo AC4Tools v1.03
  echo.
  echo Made/tested for AC4BFSP.exe:
  echo Size: 45,056,040 bytes
