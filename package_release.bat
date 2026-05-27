@@ -37,7 +37,7 @@ echo AC4Tools v1.02
  echo.
  echo Current feature tabs:
  echo - Ship: Ship Godmode, Ally Godmode, No Cannon Cooldown.
- echo - Player: Player Godmode, Infinite Breath, Stealth Mode, No Reload, No Fall Damage, Allow Eagle Vision while sprinting, Kill civilians without desynchronization, Lock Consumables ^(incl Ship Ammo^), One-time Inventory Refill, Freeze Mission Timer.
+ echo - Player: Player Godmode, Infinite Breath, Stealth Mode, No Reload, No Fall Damage, Allow Eagle Vision while sprinting, Kill civilians without desynchronization ^(also suppresses the warning^), Lock Consumables ^(incl Ship Ammo^), One-time Inventory Refill, Freeze Mission Timer.
  echo - Noclip: configurable speed and boost speed.
  echo - Game: Time Scale and Free Cam.
  echo - Freedom Cry: add 100 Liberated Slaves or 100 Recruited Maroons to the Freedom Cry resistance counters.
