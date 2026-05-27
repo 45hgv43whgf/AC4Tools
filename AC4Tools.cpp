@@ -153,6 +153,14 @@ constexpr std::uint8_t kDisabledCivilianWarningCallBytes[] = {
     0x90, 0x90, 0x90, 0x90, 0x90,
 };
 
+constexpr std::uintptr_t kPatchShowCollectiblesAddress = 0x014C1D84;
+constexpr std::uintptr_t kPatchShowCollectiblesReturnAddress = 0x014C1D8A;
+constexpr std::uintptr_t kGetMapIconVisibilityAddress = 0x00F870B0;
+constexpr std::uintptr_t kSetMapIconVisibilityAddress = 0x00F73D90;
+constexpr std::uint8_t kOriginalShowCollectiblesBytes[] = {
+    0x8B, 0x72, 0x14, 0x8B, 0x46, 0x08,
+};
+
 constexpr std::uintptr_t kPatchNoclipUpdateAddress = 0x016FAACD;
 constexpr std::uintptr_t kPatchNoclipUpdateReturnAddress = 0x016FAAD3;
 constexpr std::uint8_t kOriginalNoclipUpdateBytes[] = {
@@ -210,6 +218,7 @@ bool g_noReload = false;
 bool g_noFallDamage = false;
 bool g_eagleVisionSprint = false;
 bool g_killCiviliansNoDesync = false;
+bool g_showCollectibles = false;
 bool g_lockConsumables = false;
 bool g_freezeMissionTimer = false;
 bool g_timeScaleEnabled = false;
@@ -243,6 +252,7 @@ volatile LONG g_playerHealthHits = 0;
 volatile LONG g_infiniteBreathHits = 0;
 volatile LONG g_noReloadHits = 0;
 volatile LONG g_noFallDamageHits = 0;
+volatile LONG g_showCollectiblesHits = 0;
 volatile LONG g_lockConsumablesHits = 0;
 volatile LONG g_inventoryPointerHits = 0;
 volatile LONG g_missionTimerHits = 0;
@@ -261,6 +271,7 @@ std::uint8_t* g_fallDamageAddress = nullptr;
 std::uint8_t* g_eagleVisionSprintAddress = nullptr;
 std::uint8_t* g_civilianDesyncAddress1 = nullptr;
 std::uint8_t* g_civilianDesyncAddress2 = nullptr;
+std::uint8_t* g_showCollectiblesCave = nullptr;
 std::uint8_t* g_lockConsumablesCave = nullptr;
 std::uint8_t* g_inventoryPointerCave = nullptr;
 std::uint8_t* g_missionTimerCave = nullptr;
@@ -305,6 +316,7 @@ bool g_noReloadPatchReady = false;
 bool g_noFallDamagePatchReady = false;
 bool g_eagleVisionSprintPatchReady = false;
 bool g_killCiviliansNoDesyncPatchReady = false;
+bool g_showCollectiblesPatchReady = false;
 bool g_lockConsumablesPatchReady = false;
 bool g_lockConsumablesHotkeyReady = true;
 bool g_lockConsumablesInstallFailed = false;
@@ -341,7 +353,7 @@ FILE* g_consoleOut = nullptr;
 HANDLE g_consoleMutex = nullptr;
 volatile LONG g_mainStarted = 0;
 bool g_consoleReady = false;
-char g_pendingConsoleLines[96][192]{};
+char g_pendingConsoleLines[96][768]{};
 int g_pendingConsoleLineCount = 0;
 int g_pendingConsoleLineStart = 0;
 
@@ -372,6 +384,7 @@ void ApplyStealthModePatch();
 void ApplyEagleVisionSprintPatch();
 void ApplyKillCiviliansNoDesyncPatch();
 void DesynchronizeYourself();
+void __stdcall ShowCollectiblesVisit(std::uint8_t* mapRoot);
 
 struct ToggleAction {
     const char* id;
@@ -440,6 +453,7 @@ ToggleAction g_actions[] = {
     {"NoFallDamage", "No Fall Damage", &g_noFallDamage, &g_noFallDamagePatchReady, 0, nullptr},
     {"EagleVisionSprint", "Allow Eagle Vision while sprinting", &g_eagleVisionSprint, &g_eagleVisionSprintPatchReady, 0, &AfterEagleVisionSprintToggle},
     {"KillCiviliansNoDesync", "Kill civilians without desynchronization", &g_killCiviliansNoDesync, &g_killCiviliansNoDesyncPatchReady, 0, &AfterKillCiviliansNoDesyncToggle},
+    {"ShowCollectibles", "Show collectibles", &g_showCollectibles, &g_showCollectiblesPatchReady, 0, nullptr},
     {"LockConsumables", "Lock Consumables", &g_lockConsumables, &g_lockConsumablesHotkeyReady, 0, &AfterLockConsumablesToggle},
     {"FreezeMissionTimer", "Freeze Mission Timer", &g_freezeMissionTimer, &g_missionTimersPatchReady, 0, nullptr},
     {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, &AfterNoclipToggle},
@@ -619,17 +633,19 @@ void Log(const char* message) {
 
     SYSTEMTIME now{};
     GetLocalTime(&now);
-    char stamped[224]{};
-    sprintf_s(stamped,
-              "[%04u-%02u-%02u %02u:%02u:%02u.%03u] %s",
-              now.wYear,
-              now.wMonth,
-              now.wDay,
-              now.wHour,
-              now.wMinute,
-              now.wSecond,
-              now.wMilliseconds,
-              message);
+    char stamped[768]{};
+    _snprintf_s(stamped,
+                sizeof(stamped),
+                _TRUNCATE,
+                "[%04u-%02u-%02u %02u:%02u:%02u.%03u] %s",
+                now.wYear,
+                now.wMonth,
+                now.wDay,
+                now.wHour,
+                now.wMinute,
+                now.wSecond,
+                now.wMilliseconds,
+                message);
 
     if (g_consoleLoggingEnabled && g_consoleOut) {
         fprintf(g_consoleOut, "%s\n", stamped);
@@ -1056,6 +1072,140 @@ void DesynchronizeYourself() {
 
     Logf("Desynchronize yourself triggered via player health component 0x%08X.",
          static_cast<unsigned int>(g_playerHealthComponent));
+}
+
+bool SafeReadBytes(const void* address, void* out, std::size_t size) {
+    if (!address || !out || size == 0) {
+        return false;
+    }
+    __try {
+        memcpy(out, address, size);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool SafeReadU8(const void* address, std::uint8_t* out) {
+    return SafeReadBytes(address, out, sizeof(*out));
+}
+
+bool SafeReadU16(const void* address, std::uint16_t* out) {
+    return SafeReadBytes(address, out, sizeof(*out));
+}
+
+bool SafeReadU32(const void* address, std::uint32_t* out) {
+    return SafeReadBytes(address, out, sizeof(*out));
+}
+
+bool SafeReadPtr(const std::uint8_t* base, std::uintptr_t offset, std::uint8_t** out) {
+    std::uintptr_t value = 0;
+    if (!SafeReadBytes(base + offset, &value, sizeof(value))) {
+        return false;
+    }
+    *out = reinterpret_cast<std::uint8_t*>(value);
+    return *out != nullptr;
+}
+
+bool DwordAtEquals(const std::uint8_t* address, std::uint32_t expected) {
+    std::uint32_t value = 0;
+    return SafeReadU32(address, &value) && value == expected;
+}
+
+bool IsTrackedCollectibleGroupName(const std::uint8_t* name) {
+    return (DwordAtEquals(name, 0x74736241) && DwordAtEquals(name + 4, 0x6F677265)) ||
+           (DwordAtEquals(name, 0x6C657641) && DwordAtEquals(name + 4, 0x00656E69));
+}
+
+bool IsTrackedCollectibleIconName(const std::uint8_t* name) {
+    return (DwordAtEquals(name, 0x006F0043) &&
+            DwordAtEquals(name + 4, 0x006C006C) &&
+            DwordAtEquals(name + 8, 0x00630065)) ||
+           (DwordAtEquals(name, 0x00720070) &&
+            DwordAtEquals(name + 4, 0x00730065) &&
+            DwordAtEquals(name + 8, 0x006F0050));
+}
+
+void SetCollectibleIconVisible(std::uint8_t* icon) {
+    using GetMapIconVisibilityFn = bool(__thiscall*)(void*);
+    using SetMapIconVisibilityFn = void(__thiscall*)(void*, int);
+
+    auto getVisibility = reinterpret_cast<GetMapIconVisibilityFn>(kGetMapIconVisibilityAddress);
+    auto setVisibility = reinterpret_cast<SetMapIconVisibilityFn>(kSetMapIconVisibilityAddress);
+
+    __try {
+        const int visible = g_showCollectibles ? 1 : (getVisibility(icon) ? 1 : 0);
+        setVisibility(icon, visible);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void VisitCollectibleIconList(std::uint8_t* iconTable, std::uint16_t count) {
+    for (std::uint16_t i = 0; i < count; ++i) {
+        std::uint8_t* icon = nullptr;
+        if (!SafeReadPtr(iconTable, i * sizeof(std::uintptr_t), &icon)) {
+            continue;
+        }
+
+        std::uint8_t* visibilityState = nullptr;
+        std::uint8_t completed = 0;
+        std::uint8_t suppressed = 0;
+        if (!SafeReadPtr(icon, 0x58, &visibilityState) ||
+            !SafeReadU8(icon + 0x6E, &completed) ||
+            !SafeReadU8(icon + 0x6D, &suppressed) ||
+            completed == 1 ||
+            suppressed == 1) {
+            continue;
+        }
+
+        std::uint8_t* info = nullptr;
+        std::uint8_t* settings = nullptr;
+        std::uint8_t* nameOwner = nullptr;
+        std::uint8_t* name = nullptr;
+        if (!SafeReadPtr(icon, 0x20, &info) ||
+            !SafeReadPtr(info, 0x00, &settings) ||
+            !SafeReadPtr(settings, 0x2C, &nameOwner) ||
+            !SafeReadPtr(nameOwner, 0x00, &nameOwner) ||
+            !SafeReadPtr(nameOwner, 0x00, &nameOwner) ||
+            !SafeReadPtr(nameOwner, 0x28, &name) ||
+            !IsTrackedCollectibleIconName(name)) {
+            continue;
+        }
+
+        SetCollectibleIconVisible(icon);
+    }
+}
+
+void __stdcall ShowCollectiblesVisit(std::uint8_t* mapRoot) {
+    if (!g_showCollectibles || !mapRoot) {
+        return;
+    }
+
+    InterlockedIncrement(&g_showCollectiblesHits);
+
+    std::uint8_t* group = nullptr;
+    std::uint8_t* groupName = nullptr;
+    std::uint8_t* iconTable = nullptr;
+    std::uint16_t iconCount = 0;
+
+    if (SafeReadPtr(mapRoot, 0x10, &group) &&
+        SafeReadPtr(group, 0x00, &groupName) &&
+        SafeReadPtr(groupName, 0x44, &groupName) &&
+        SafeReadPtr(groupName, 0x30, &groupName) &&
+        IsTrackedCollectibleGroupName(groupName) &&
+        SafeReadPtr(mapRoot, 0x24, &iconTable) &&
+        SafeReadU16(mapRoot + 0x2A, &iconCount)) {
+        VisitCollectibleIconList(iconTable, iconCount);
+        return;
+    }
+
+    std::uint8_t* listOwner = nullptr;
+    if (SafeReadPtr(mapRoot, 0x14, &listOwner) &&
+        SafeReadPtr(listOwner, 0x00, &listOwner) &&
+        SafeReadPtr(listOwner, 0x0C, &iconTable) &&
+        SafeReadU16(listOwner + 0x12, &iconCount)) {
+        VisitCollectibleIconList(iconTable, iconCount);
+    }
 }
 
 void EmitJump(std::uint8_t*& p, std::uintptr_t target) {
@@ -2915,6 +3065,53 @@ bool InstallKillCiviliansNoDesyncPatch() {
     return true;
 }
 
+bool InstallShowCollectiblesPatch() {
+    auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchShowCollectiblesAddress);
+    if (patchAddress[0] == 0xE9) {
+        Log("Refusing Show collectibles patch: 0x014C1D84 is already hooked by another tool.");
+        return false;
+    }
+    if (!BytesMatch(patchAddress, kOriginalShowCollectiblesBytes, sizeof(kOriginalShowCollectiblesBytes))) {
+        LogPatchMismatch("Show collectibles patch at 0x014C1D84",
+                         patchAddress,
+                         kOriginalShowCollectiblesBytes,
+                         sizeof(kOriginalShowCollectiblesBytes));
+        return false;
+    }
+
+    g_showCollectiblesCave = static_cast<std::uint8_t*>(
+        VirtualAlloc(nullptr, 96, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!g_showCollectiblesCave) {
+        Log("VirtualAlloc failed for Show collectibles patch.");
+        return false;
+    }
+
+    std::uint8_t* p = g_showCollectiblesCave;
+
+    // pushad
+    *p++ = 0x60;
+
+    // push edx
+    *p++ = 0x52;
+
+    EmitCall(p, reinterpret_cast<const void*>(&ShowCollectiblesVisit));
+
+    // popad
+    *p++ = 0x61;
+
+    memcpy(p, kOriginalShowCollectiblesBytes, sizeof(kOriginalShowCollectiblesBytes));
+    p += sizeof(kOriginalShowCollectiblesBytes);
+    EmitJump(p, kPatchShowCollectiblesReturnAddress);
+
+    if (!WriteJump(patchAddress, g_showCollectiblesCave, sizeof(kOriginalShowCollectiblesBytes))) {
+        Log("Refusing Show collectibles patch: failed to write hook at 0x014C1D84.");
+        return false;
+    }
+
+    Log("Installed Show collectibles hook at 0x014C1D84.");
+    return true;
+}
+
 bool InstallLockConsumablesPatch() {
     if (g_lockConsumablesPatchReady) {
         return true;
@@ -3569,6 +3766,7 @@ bool InstallPatches() {
     g_noFallDamagePatchReady = InstallNoFallDamagePatch();
     g_eagleVisionSprintPatchReady = InstallEagleVisionSprintPatch();
     g_killCiviliansNoDesyncPatchReady = InstallKillCiviliansNoDesyncPatch();
+    g_showCollectiblesPatchReady = InstallShowCollectiblesPatch();
     g_missionTimerPatchReady = InstallMissionTimerPatch();
     g_missionTimer2PatchReady = InstallMissionTimer2Patch();
     g_missionTimersPatchReady = g_missionTimerPatchReady || g_missionTimer2PatchReady;
@@ -3608,6 +3806,9 @@ bool InstallPatches() {
     if (!g_killCiviliansNoDesyncPatchReady) {
         g_killCiviliansNoDesync = false;
     }
+    if (!g_showCollectiblesPatchReady) {
+        g_showCollectibles = false;
+    }
     if (!g_missionTimersPatchReady) {
         g_freezeMissionTimer = false;
     }
@@ -3626,6 +3827,7 @@ bool InstallPatches() {
         !g_noFallDamagePatchReady &&
         !g_eagleVisionSprintPatchReady &&
         !g_killCiviliansNoDesyncPatchReady &&
+        !g_showCollectiblesPatchReady &&
         !g_missionTimersPatchReady &&
         !g_inventoryPointerPatchReady &&
         !g_noclipPatchReady) {
@@ -3633,7 +3835,7 @@ bool InstallPatches() {
         return false;
     }
     g_installed = true;
-    Logf("AC4Tools standalone patches installed: ship=%d cannonCooldown=%d allyGodmode=%d timescale=%d player=%d breath=%d stealth=%d noReload=%d noFallDamage=%d eagleVisionSprint=%d civilianNoDesync=%d timers=%d lockConsumables=%d inventoryPointer=%d noclip=%d.",
+    Logf("AC4Tools standalone patches installed: ship=%d cannonCooldown=%d allyGodmode=%d timescale=%d player=%d breath=%d stealth=%d noReload=%d noFallDamage=%d eagleVisionSprint=%d civilianNoDesync=%d showCollectibles=%d timers=%d lockConsumables=%d inventoryPointer=%d noclip=%d.",
          g_shipPatchReady ? 1 : 0,
          g_noCannonCooldownPatchReady ? 1 : 0,
          g_allyGodmodePatchReady ? 1 : 0,
@@ -3645,6 +3847,7 @@ bool InstallPatches() {
          g_noFallDamagePatchReady ? 1 : 0,
          g_eagleVisionSprintPatchReady ? 1 : 0,
          g_killCiviliansNoDesyncPatchReady ? 1 : 0,
+         g_showCollectiblesPatchReady ? 1 : 0,
          g_missionTimersPatchReady ? 1 : 0,
          g_lockConsumablesPatchReady ? 1 : 0,
          g_inventoryPointerPatchReady ? 1 : 0,
@@ -4097,6 +4300,7 @@ void DrawMenu() {
                 g_noFallDamagePatchReady ||
                 g_eagleVisionSprintPatchReady ||
                 g_killCiviliansNoDesyncPatchReady ||
+                g_showCollectiblesPatchReady ||
                 lockConsumablesCanBeTried ||
                 g_inventoryPointerPatchReady;
             if (!hasPlayerOptions) {
@@ -4156,6 +4360,11 @@ void DrawMenu() {
                     }
                 } else {
                     ImGui::TextDisabled("Kill civilians without desynchronization unavailable");
+                }
+                if (g_showCollectiblesPatchReady) {
+                    ImGui::Checkbox("Show collectibles", &g_showCollectibles);
+                } else {
+                    ImGui::TextDisabled("Show collectibles unavailable");
                 }
 
                 ImGui::NextColumn();
@@ -4616,6 +4825,7 @@ void DrawMenu() {
                 DrawPatchRow("No Fall Damage", g_noFallDamagePatchReady, "AOB", g_noFallDamageHits);
                 DrawPatchRow("Eagle Vision Sprint", g_eagleVisionSprintPatchReady, "AOB");
                 DrawPatchRow("Civilian No Desync", g_killCiviliansNoDesyncPatchReady, "AOB");
+                DrawPatchRow("Show Collectibles", g_showCollectiblesPatchReady, "0x014C1D84", g_showCollectiblesHits);
                 DrawPatchRow("Lock Consumables", g_lockConsumablesPatchReady, "0x011A1F6D", g_lockConsumablesHits);
                 DrawPatchRow("Inventory Pointer", g_inventoryPointerPatchReady, "0x01CFD381", g_inventoryPointerHits);
                 DrawPatchRow("Mission Timer", g_missionTimerPatchReady, "0x019446C3", g_missionTimerHits);
