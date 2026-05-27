@@ -33,6 +33,8 @@ Other game builds may use different code addresses or bytes. If a supported patc
 - Infinite Breath
 - Stealth Mode
 - No Reload
+- No Fall Damage
+- Allow Eagle Vision while sprinting
 - Lock Consumables (incl Ship Ammo): prevents the shared consumable decrement from lowering values while enabled. This covers player consumables and ship ammunition through one shared hook. Enable it after the save is fully loaded.
 - One-time Inventory Refill: choose one resource/ammo type from a dropdown and refill it once to its preset value
 - Freeze Mission Timer
@@ -197,6 +199,8 @@ PlayerGodmode = 0
 InfiniteBreath = 0
 StealthMode = 0
 NoReload = 0
+NoFallDamage = 0
+EagleVisionSprint = 0
 LockConsumables = 0
 FreezeMissionTimer = 0
 Noclip = 0

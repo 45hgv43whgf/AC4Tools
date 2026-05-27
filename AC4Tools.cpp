@@ -105,6 +105,20 @@ constexpr std::uint8_t kOriginalInventoryPointerBytes[] = {
     0x8B, 0x82, 0xE8, 0x00, 0x00, 0x00,
 };
 
+constexpr std::uint8_t kFallDamagePattern[] = {
+    0x51, 0x53, 0x51, 0xF3, 0x0F, 0x11, 0x04, 0x24, 0x57,
+};
+constexpr std::uint8_t kOriginalFallDamageBytes[] = {
+    0x51, 0x53, 0x51, 0xF3, 0x0F, 0x11, 0x04, 0x24,
+};
+
+constexpr std::uint8_t kEagleVisionSprintPattern[] = {
+    0x74, 0x08, 0x50, 0x8B, 0xCA, 0xE8, 0x65, 0x0F, 0x6F,
+    0xFF, 0x8B, 0x45, 0xF4, 0xF6, 0x40, 0x1C, 0x01,
+};
+constexpr std::uint8_t kOriginalEagleVisionSprintByte = 0x74;
+constexpr std::uint8_t kEnabledEagleVisionSprintByte = 0xEB;
+
 constexpr std::uintptr_t kPatchNoclipUpdateAddress = 0x016FAACD;
 constexpr std::uintptr_t kPatchNoclipUpdateReturnAddress = 0x016FAAD3;
 constexpr std::uint8_t kOriginalNoclipUpdateBytes[] = {
@@ -159,6 +173,8 @@ bool g_playerGodmode = false;
 bool g_infiniteBreath = false;
 bool g_stealthMode = false;
 bool g_noReload = false;
+bool g_noFallDamage = false;
+bool g_eagleVisionSprint = false;
 bool g_lockConsumables = false;
 bool g_freezeMissionTimer = false;
 bool g_timeScaleEnabled = false;
@@ -191,6 +207,7 @@ volatile LONG g_timeIntervalHits = 0;
 volatile LONG g_playerHealthHits = 0;
 volatile LONG g_infiniteBreathHits = 0;
 volatile LONG g_noReloadHits = 0;
+volatile LONG g_noFallDamageHits = 0;
 volatile LONG g_lockConsumablesHits = 0;
 volatile LONG g_inventoryPointerHits = 0;
 volatile LONG g_missionTimerHits = 0;
@@ -204,6 +221,9 @@ std::uint8_t* g_timeIntervalCave = nullptr;
 std::uint8_t* g_playerHealthCave = nullptr;
 std::uint8_t* g_infiniteBreathCave = nullptr;
 std::uint8_t* g_noReloadCave = nullptr;
+std::uint8_t* g_noFallDamageCave = nullptr;
+std::uint8_t* g_fallDamageAddress = nullptr;
+std::uint8_t* g_eagleVisionSprintAddress = nullptr;
 std::uint8_t* g_lockConsumablesCave = nullptr;
 std::uint8_t* g_inventoryPointerCave = nullptr;
 std::uint8_t* g_missionTimerCave = nullptr;
@@ -244,6 +264,8 @@ bool g_playerHealthPatchReady = false;
 bool g_infiniteBreathPatchReady = false;
 bool g_stealthModePatchReady = false;
 bool g_noReloadPatchReady = false;
+bool g_noFallDamagePatchReady = false;
+bool g_eagleVisionSprintPatchReady = false;
 bool g_lockConsumablesPatchReady = false;
 bool g_lockConsumablesHotkeyReady = true;
 bool g_lockConsumablesInstallFailed = false;
@@ -308,6 +330,7 @@ bool InstallLockConsumablesPatch();
 bool InstallFreeCamPatch();
 void ApplyNoCannonCooldownPatch();
 void ApplyStealthModePatch();
+void ApplyEagleVisionSprintPatch();
 
 struct ToggleAction {
     const char* id;
@@ -356,6 +379,10 @@ void AfterStealthModeToggle() {
     ApplyStealthModePatch();
 }
 
+void AfterEagleVisionSprintToggle() {
+    ApplyEagleVisionSprintPatch();
+}
+
 ToggleAction g_actions[] = {
     {"ShipGodmode", "Ship Godmode", &g_enabled, &g_shipPatchReady, 0, nullptr},
     {"NoCannonCooldown", "No Cannon Cooldown", &g_noCannonCooldown, &g_noCannonCooldownPatchReady, 0, &AfterNoCannonCooldownToggle},
@@ -364,6 +391,8 @@ ToggleAction g_actions[] = {
     {"InfiniteBreath", "Infinite Breath", &g_infiniteBreath, &g_infiniteBreathPatchReady, 0, nullptr},
     {"StealthMode", "Stealth Mode", &g_stealthMode, &g_stealthModePatchReady, 0, &AfterStealthModeToggle},
     {"NoReload", "No Reload", &g_noReload, &g_noReloadPatchReady, 0, nullptr},
+    {"NoFallDamage", "No Fall Damage", &g_noFallDamage, &g_noFallDamagePatchReady, 0, nullptr},
+    {"EagleVisionSprint", "Allow Eagle Vision while sprinting", &g_eagleVisionSprint, &g_eagleVisionSprintPatchReady, 0, &AfterEagleVisionSprintToggle},
     {"LockConsumables", "Lock Consumables", &g_lockConsumables, &g_lockConsumablesHotkeyReady, 0, &AfterLockConsumablesToggle},
     {"FreezeMissionTimer", "Freeze Mission Timer", &g_freezeMissionTimer, &g_missionTimersPatchReady, 0, nullptr},
     {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, &AfterNoclipToggle},
@@ -881,6 +910,32 @@ void ApplyStealthModePatch() {
         g_stealthMode = false;
         g_stealthModePatchReady = false;
         Log("Stealth Mode disabled: failed to write patch byte.");
+    }
+}
+
+void ApplyEagleVisionSprintPatch() {
+    if (!g_eagleVisionSprintPatchReady || !g_eagleVisionSprintAddress) {
+        g_eagleVisionSprint = false;
+        return;
+    }
+
+    const std::uint8_t desired = g_eagleVisionSprint ? kEnabledEagleVisionSprintByte : kOriginalEagleVisionSprintByte;
+    if (*g_eagleVisionSprintAddress == desired) {
+        return;
+    }
+    if (*g_eagleVisionSprintAddress != kOriginalEagleVisionSprintByte &&
+        *g_eagleVisionSprintAddress != kEnabledEagleVisionSprintByte) {
+        g_eagleVisionSprint = false;
+        g_eagleVisionSprintPatchReady = false;
+        Logf("Allow Eagle Vision while sprinting disabled: byte at 0x%08X changed unexpectedly to 0x%02X.",
+             static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(g_eagleVisionSprintAddress)),
+             *g_eagleVisionSprintAddress);
+        return;
+    }
+    if (!WriteMemory(g_eagleVisionSprintAddress, &desired, sizeof(desired))) {
+        g_eagleVisionSprint = false;
+        g_eagleVisionSprintPatchReady = false;
+        Log("Allow Eagle Vision while sprinting disabled: failed to write patch byte.");
     }
 }
 
@@ -2581,6 +2636,105 @@ bool InstallInfiniteBreathPatch() {
     return true;
 }
 
+bool InstallNoFallDamagePatch() {
+    auto* patchAddress = FindMainModulePattern(kFallDamagePattern, sizeof(kFallDamagePattern));
+    if (!patchAddress) {
+        Log("Refusing No Fall Damage patch: fall damage AOB was not found.");
+        return false;
+    }
+    if (patchAddress[0] == 0xE9) {
+        Log("Refusing No Fall Damage patch: fall damage site is already hooked by another tool.");
+        return false;
+    }
+    if (!BytesMatch(patchAddress, kOriginalFallDamageBytes, sizeof(kOriginalFallDamageBytes))) {
+        LogPatchMismatch("No Fall Damage patch",
+                         patchAddress,
+                         kOriginalFallDamageBytes,
+                         sizeof(kOriginalFallDamageBytes));
+        return false;
+    }
+
+    g_noFallDamageCave = static_cast<std::uint8_t*>(
+        VirtualAlloc(nullptr, 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!g_noFallDamageCave) {
+        Log("VirtualAlloc failed for No Fall Damage patch.");
+        return false;
+    }
+
+    g_fallDamageAddress = patchAddress;
+    std::uint8_t* p = g_noFallDamageCave;
+
+    // inc dword ptr [&g_noFallDamageHits]
+    *p++ = 0xFF;
+    *p++ = 0x05;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_noFallDamageHits);
+    p += 4;
+
+    // cmp byte ptr [&g_noFallDamage], 0
+    *p++ = 0x80;
+    *p++ = 0x3D;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_noFallDamage);
+    p += 4;
+    *p++ = 0x00;
+
+    // je original
+    *p++ = 0x74;
+    auto* disabledJumpOffset = p++;
+
+    // cmp dword ptr [&g_playerEntity], edi
+    *p++ = 0x39;
+    *p++ = 0x3D;
+    *reinterpret_cast<std::uint32_t*>(p) = reinterpret_cast<std::uint32_t>(&g_playerEntity);
+    p += 4;
+
+    // jne original
+    *p++ = 0x75;
+    auto* notPlayerJumpOffset = p++;
+
+    // movss xmm0, xmm7
+    *p++ = 0xF3;
+    *p++ = 0x0F;
+    *p++ = 0x10;
+    *p++ = 0xC7;
+
+    auto* originalLabel = p;
+    *disabledJumpOffset = static_cast<std::uint8_t>(originalLabel - disabledJumpOffset - 1);
+    *notPlayerJumpOffset = static_cast<std::uint8_t>(originalLabel - notPlayerJumpOffset - 1);
+
+    memcpy(p, kOriginalFallDamageBytes, sizeof(kOriginalFallDamageBytes));
+    p += sizeof(kOriginalFallDamageBytes);
+    EmitJump(p, reinterpret_cast<std::uintptr_t>(patchAddress + sizeof(kOriginalFallDamageBytes)));
+
+    if (!WriteJump(patchAddress, g_noFallDamageCave, sizeof(kOriginalFallDamageBytes))) {
+        Log("Refusing No Fall Damage patch: failed to write fall damage hook.");
+        return false;
+    }
+
+    Logf("Installed No Fall Damage hook at 0x%08X.",
+         static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(patchAddress)));
+    return true;
+}
+
+bool InstallEagleVisionSprintPatch() {
+    auto* patchAddress = FindMainModulePattern(kEagleVisionSprintPattern, sizeof(kEagleVisionSprintPattern));
+    if (!patchAddress) {
+        Log("Refusing Allow Eagle Vision while sprinting patch: AOB was not found.");
+        return false;
+    }
+    if (*patchAddress != kOriginalEagleVisionSprintByte) {
+        LogPatchMismatch("Allow Eagle Vision while sprinting patch",
+                         patchAddress,
+                         &kOriginalEagleVisionSprintByte,
+                         sizeof(kOriginalEagleVisionSprintByte));
+        return false;
+    }
+
+    g_eagleVisionSprintAddress = patchAddress;
+    Logf("Allow Eagle Vision while sprinting patch ready at 0x%08X.",
+         static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(patchAddress)));
+    return true;
+}
+
 bool InstallLockConsumablesPatch() {
     if (g_lockConsumablesPatchReady) {
         return true;
@@ -3232,6 +3386,8 @@ bool InstallPatches() {
     g_infiniteBreathPatchReady = InstallInfiniteBreathPatch();
     g_stealthModePatchReady = InstallStealthModePatch();
     g_noReloadPatchReady = InstallNoReloadPatch();
+    g_noFallDamagePatchReady = InstallNoFallDamagePatch();
+    g_eagleVisionSprintPatchReady = InstallEagleVisionSprintPatch();
     g_missionTimerPatchReady = InstallMissionTimerPatch();
     g_missionTimer2PatchReady = InstallMissionTimer2Patch();
     g_missionTimersPatchReady = g_missionTimerPatchReady || g_missionTimer2PatchReady;
@@ -3262,6 +3418,12 @@ bool InstallPatches() {
     if (!g_noReloadPatchReady) {
         g_noReload = false;
     }
+    if (!g_noFallDamagePatchReady) {
+        g_noFallDamage = false;
+    }
+    if (!g_eagleVisionSprintPatchReady) {
+        g_eagleVisionSprint = false;
+    }
     if (!g_missionTimersPatchReady) {
         g_freezeMissionTimer = false;
     }
@@ -3277,6 +3439,8 @@ bool InstallPatches() {
         !g_infiniteBreathPatchReady &&
         !g_stealthModePatchReady &&
         !g_noReloadPatchReady &&
+        !g_noFallDamagePatchReady &&
+        !g_eagleVisionSprintPatchReady &&
         !g_missionTimersPatchReady &&
         !g_inventoryPointerPatchReady &&
         !g_noclipPatchReady) {
@@ -3284,7 +3448,7 @@ bool InstallPatches() {
         return false;
     }
     g_installed = true;
-    Logf("AC4Tools standalone patches installed: ship=%d cannonCooldown=%d allyGodmode=%d timescale=%d player=%d breath=%d stealth=%d noReload=%d timers=%d lockConsumables=%d inventoryPointer=%d noclip=%d.",
+    Logf("AC4Tools standalone patches installed: ship=%d cannonCooldown=%d allyGodmode=%d timescale=%d player=%d breath=%d stealth=%d noReload=%d noFallDamage=%d eagleVisionSprint=%d timers=%d lockConsumables=%d inventoryPointer=%d noclip=%d.",
          g_shipPatchReady ? 1 : 0,
          g_noCannonCooldownPatchReady ? 1 : 0,
          g_allyGodmodePatchReady ? 1 : 0,
@@ -3293,6 +3457,8 @@ bool InstallPatches() {
          g_infiniteBreathPatchReady ? 1 : 0,
          g_stealthModePatchReady ? 1 : 0,
          g_noReloadPatchReady ? 1 : 0,
+         g_noFallDamagePatchReady ? 1 : 0,
+         g_eagleVisionSprintPatchReady ? 1 : 0,
          g_missionTimersPatchReady ? 1 : 0,
          g_lockConsumablesPatchReady ? 1 : 0,
          g_inventoryPointerPatchReady ? 1 : 0,
@@ -3740,6 +3906,8 @@ void DrawMenu() {
                 g_infiniteBreathPatchReady ||
                 g_stealthModePatchReady ||
                 g_noReloadPatchReady ||
+                g_noFallDamagePatchReady ||
+                g_eagleVisionSprintPatchReady ||
                 lockConsumablesCanBeTried ||
                 g_inventoryPointerPatchReady;
             if (!hasPlayerOptions) {
@@ -3772,6 +3940,22 @@ void DrawMenu() {
                     ImGui::Checkbox("No Reload", &g_noReload);
                 } else {
                     ImGui::TextDisabled("No Reload unavailable");
+                }
+                if (g_noFallDamagePatchReady) {
+                    ImGui::Checkbox("No Fall Damage", &g_noFallDamage);
+                } else {
+                    ImGui::TextDisabled("No Fall Damage unavailable");
+                }
+                if (g_eagleVisionSprintPatchReady) {
+                    bool value = g_eagleVisionSprint;
+                    if (ImGui::Checkbox("Allow Eagle Vision while sprinting", &value)) {
+                        g_eagleVisionSprint = value;
+                        ApplyEagleVisionSprintPatch();
+                        Log(g_eagleVisionSprint ? "Allow Eagle Vision while sprinting enabled." :
+                                                  "Allow Eagle Vision while sprinting disabled.");
+                    }
+                } else {
+                    ImGui::TextDisabled("Allow Eagle Vision while sprinting unavailable");
                 }
 
                 ImGui::NextColumn();
@@ -4213,6 +4397,8 @@ void DrawMenu() {
                 DrawPatchRow("Infinite Breath", g_infiniteBreathPatchReady, "0x01148936", g_infiniteBreathHits);
                 DrawPatchRow("Stealth Mode", g_stealthModePatchReady, "0x0101CB66");
                 DrawPatchRow("No Reload", g_noReloadPatchReady, "0x016B8A96", g_noReloadHits);
+                DrawPatchRow("No Fall Damage", g_noFallDamagePatchReady, "AOB", g_noFallDamageHits);
+                DrawPatchRow("Eagle Vision Sprint", g_eagleVisionSprintPatchReady, "AOB");
                 DrawPatchRow("Lock Consumables", g_lockConsumablesPatchReady, "0x011A1F6D", g_lockConsumablesHits);
                 DrawPatchRow("Inventory Pointer", g_inventoryPointerPatchReady, "0x01CFD381", g_inventoryPointerHits);
                 DrawPatchRow("Mission Timer", g_missionTimerPatchReady, "0x019446C3", g_missionTimerHits);
@@ -4610,6 +4796,7 @@ DWORD WINAPI MainThread(void*) {
         UpdateTimeScaleInterval();
         ApplyNoCannonCooldownPatch();
         ApplyStealthModePatch();
+        ApplyEagleVisionSprintPatch();
         MaintainUnlocks();
     }
     return 0;
