@@ -4,7 +4,7 @@ AC4Tools is a standalone ASI plugin for **Assassin's Creed IV Black Flag**.
 
 It adds an in-game ImGui menu with ship, player, consumable lock, one-time inventory refills, unlocks, Freedom Cry helpers, noclip, time scale, input/system, and hotkey options. The plugin is intended to be loaded through Ultimate ASI Loader.
 
-Current version: **v1.04**
+Current version: **v1.05**
 
 ## Game Version
 
@@ -17,7 +17,7 @@ Timestamp: 2023-11-14 14:41:36
 SHA256: 732AAE5679D068EE58736C35D2627473EB6ED34B28A1AE3B11076D7AD3212ACD
 ```
 
-Other game builds may use different code addresses or bytes. If a supported patch check does not match, or another tool already owns that address, AC4Tools refuses that feature instead of patching unknown code. For byte mismatches, it logs the expected and found bytes.
+Other game builds may use different code addresses or bytes. If a supported patch check does not match, or another tool already owns that address, AC4Tools refuses that feature instead of patching unknown code. For byte mismatches, it logs the expected and found bytes. Startup diagnostics also log the detected executable name, size, timestamp, and SHA256, and warn when the SHA256 does not match the supported build above.
 
 ## Features
 
@@ -90,6 +90,8 @@ Unlocks can irreversibly softlock your save if an unlocked item was supposed to 
 - Configurable hotkeys for the menu, toggleable features, and Free Cam controls
 - In-game UI opened with the configured menu hotkey, `B` by default
 - Optional console and file logging for patch status and diagnostics
+- INFO/WARN/ERROR log levels; console warnings are yellow and errors are red
+- DX11 swap-chain resize/reset handling for better overlay compatibility, including ReShade setups
 
 ## Notes
 
@@ -224,6 +226,8 @@ Exit = 121
 ```
 
 `EnableConsole = 1` opens a console window. `EnableFile = 1` writes timestamped lines to `AC4Tools.log` next to `AC4BFSP.exe`. Both are off by default.
+
+Logs include `[INFO]`, `[WARN]`, and `[ERROR]` levels. When console logging is enabled, warnings are yellow and errors are red. Startup diagnostics print the detected `AC4BFSP.exe` size, timestamp, and SHA256; a SHA256 mismatch is a warning that the game executable may not be the fully supported build.
 
 `LockMouseToWindow = 1` confines the Windows cursor to the AC4 window while the game is focused. It releases automatically when AC4 loses focus, such as when you alt-tab. This can prevent scrolling or clicking on a second monitor during gameplay.
 

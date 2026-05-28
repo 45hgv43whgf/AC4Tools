@@ -42,7 +42,7 @@ cl /nologo /O2 /LD /EHsc /MT ^
  "%PROJECT_DIR%third_party\minhook\src\trampoline.c" ^
  "%PROJECT_DIR%third_party\minhook\src\hde\hde32.c" ^
  "%PROJECT_DIR%obj\AC4Tools.res" ^
- /link /DLL /NOLOGO user32.lib gdi32.lib d3d11.lib dxgi.lib dinput8.lib dxguid.lib
+ /link /DLL /NOLOGO user32.lib gdi32.lib d3d11.lib dxgi.lib dinput8.lib dxguid.lib advapi32.lib
 if errorlevel 1 exit /b %errorlevel%
 
 call "%PROJECT_DIR%package_release.bat" "%PROJECT_DIR%bin\AC4Tools.asi"

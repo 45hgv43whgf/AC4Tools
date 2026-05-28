@@ -5,6 +5,7 @@
 #endif
 #include <dinput.h>
 #include <dxgi.h>
+#include <wincrypt.h>
 
 #include <cstdint>
 #include <cstddef>
@@ -23,6 +24,7 @@
 #pragma comment(lib, "dinput8.lib")
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "advapi32.lib")
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -30,8 +32,8 @@ extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wparam
 namespace {
 
 constexpr const char* kToolName = "AC4Tools";
-constexpr const char* kToolVersion = "v1.04";
-constexpr const char* kToolTitle = "AC4Tools v1.04";
+constexpr const char* kToolVersion = "v1.05";
+constexpr const char* kToolTitle = "AC4Tools v1.05";
 constexpr const char* kSupportedGameExe = "AC4BFSP.exe";
 constexpr const char* kSupportedGameSize = "45,056,040 bytes";
 constexpr const char* kSupportedGameTimestamp = "2023-11-14 14:41:36";
@@ -339,6 +341,7 @@ char g_gameExePath[MAX_PATH]{};
 char g_gameExeName[64]{};
 char g_gameExeSizeText[48]{"unknown"};
 char g_gameExeTimestampText[64]{"unknown"};
+char g_gameExeSha256Text[65]{"unknown"};
 bool g_menuOpen = false;
 bool g_inputCaptured = false;
 bool g_imguiReady = false;
@@ -354,6 +357,7 @@ ID3D11DeviceContext* g_context = nullptr;
 ID3D11RenderTargetView* g_renderTarget = nullptr;
 FILE* g_consoleOut = nullptr;
 HANDLE g_consoleMutex = nullptr;
+WORD g_consoleDefaultAttributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
 volatile LONG g_mainStarted = 0;
 bool g_consoleReady = false;
 char g_pendingConsoleLines[96][768]{};
@@ -362,6 +366,8 @@ int g_pendingConsoleLineStart = 0;
 
 using PresentFn = HRESULT(__stdcall*)(IDXGISwapChain*, UINT, UINT);
 PresentFn g_originalPresent = nullptr;
+using ResizeBuffersFn = HRESULT(__stdcall*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+ResizeBuffersFn g_originalResizeBuffers = nullptr;
 
 using GetDeviceStateFn = HRESULT(__stdcall*)(IDirectInputDevice8A*, DWORD, LPVOID);
 using GetDeviceDataFn = HRESULT(__stdcall*)(IDirectInputDevice8A*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
@@ -378,6 +384,12 @@ GetKeyboardStateFn g_originalGetKeyboardState = nullptr;
 
 void InitConsole();
 void __stdcall UpdateNoclipState();
+
+enum class LogLevel {
+    Info,
+    Warning,
+    Error,
+};
 void UpdateTimeScaleInterval();
 void UpdateFreeCam();
 bool InstallLockConsumablesPatch();
@@ -629,7 +641,58 @@ void ReleaseMenuInputState() {
     }
 }
 
-void Log(const char* message) {
+const char* LogLevelName(LogLevel level) {
+    switch (level) {
+        case LogLevel::Warning:
+            return "WARN";
+        case LogLevel::Error:
+            return "ERROR";
+        case LogLevel::Info:
+        default:
+            return "INFO";
+    }
+}
+
+WORD LogLevelConsoleAttributes(LogLevel level) {
+    switch (level) {
+        case LogLevel::Warning:
+            return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+        case LogLevel::Error:
+            return FOREGROUND_RED | FOREGROUND_INTENSITY;
+        case LogLevel::Info:
+        default:
+            return g_consoleDefaultAttributes;
+    }
+}
+
+void WriteConsoleLogLine(LogLevel level, const char* line) {
+    HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (console && console != INVALID_HANDLE_VALUE) {
+        SetConsoleTextAttribute(console, LogLevelConsoleAttributes(level));
+    }
+    fprintf(g_consoleOut, "%s\n", line);
+    fflush(g_consoleOut);
+    if (console && console != INVALID_HANDLE_VALUE) {
+        SetConsoleTextAttribute(console, g_consoleDefaultAttributes);
+    }
+}
+
+LogLevel ParseStampedLogLevel(const char* line) {
+    const char* secondBracket = strstr(line, "] [");
+    if (!secondBracket) {
+        return LogLevel::Info;
+    }
+    const char* level = secondBracket + 3;
+    if (strncmp(level, "WARN]", 5) == 0) {
+        return LogLevel::Warning;
+    }
+    if (strncmp(level, "ERROR]", 6) == 0) {
+        return LogLevel::Error;
+    }
+    return LogLevel::Info;
+}
+
+void LogMessage(LogLevel level, const char* message) {
     if (!g_consoleLoggingEnabled && !g_fileLoggingEnabled) {
         return;
     }
@@ -640,7 +703,7 @@ void Log(const char* message) {
     _snprintf_s(stamped,
                 sizeof(stamped),
                 _TRUNCATE,
-                "[%04u-%02u-%02u %02u:%02u:%02u.%03u] %s",
+                "[%04u-%02u-%02u %02u:%02u:%02u.%03u] [%s] %s",
                 now.wYear,
                 now.wMonth,
                 now.wDay,
@@ -648,11 +711,11 @@ void Log(const char* message) {
                 now.wMinute,
                 now.wSecond,
                 now.wMilliseconds,
+                LogLevelName(level),
                 message);
 
     if (g_consoleLoggingEnabled && g_consoleOut) {
-        fprintf(g_consoleOut, "%s\n", stamped);
-        fflush(g_consoleOut);
+        WriteConsoleLogLine(level, stamped);
     } else if (g_consoleLoggingEnabled) {
         const int index = (g_pendingConsoleLineStart + g_pendingConsoleLineCount) % 96;
         strncpy_s(g_pendingConsoleLines[index], stamped, _TRUNCATE);
@@ -685,6 +748,18 @@ void Log(const char* message) {
     fclose(file);
 }
 
+void Log(const char* message) {
+    LogMessage(LogLevel::Info, message);
+}
+
+void LogWarn(const char* message) {
+    LogMessage(LogLevel::Warning, message);
+}
+
+void LogError(const char* message) {
+    LogMessage(LogLevel::Error, message);
+}
+
 void Logf(const char* format, ...) {
     char message[512]{};
     va_list args;
@@ -692,6 +767,24 @@ void Logf(const char* format, ...) {
     vsnprintf_s(message, sizeof(message), _TRUNCATE, format, args);
     va_end(args);
     Log(message);
+}
+
+void LogWarnf(const char* format, ...) {
+    char message[512]{};
+    va_list args;
+    va_start(args, format);
+    vsnprintf_s(message, sizeof(message), _TRUNCATE, format, args);
+    va_end(args);
+    LogWarn(message);
+}
+
+void LogErrorf(const char* format, ...) {
+    char message[512]{};
+    va_list args;
+    va_start(args, format);
+    vsnprintf_s(message, sizeof(message), _TRUNCATE, format, args);
+    va_end(args);
+    LogError(message);
 }
 
 bool IsTargetGameProcess() {
@@ -922,7 +1015,7 @@ void LogPatchMismatch(const char* label,
     char foundText[96]{};
     FormatBytes(expected, size, expectedText, sizeof(expectedText));
     FormatBytes(address, size, foundText, sizeof(foundText));
-    Logf("Refusing %s: expected [%s], found [%s].", label, expectedText, foundText);
+    LogWarnf("Refusing %s: expected [%s], found [%s].", label, expectedText, foundText);
 }
 
 void ApplyNoCannonCooldownPatch() {
@@ -940,7 +1033,7 @@ void ApplyNoCannonCooldownPatch() {
         *patchAddress != kEnabledNoCannonCooldownByte) {
         g_noCannonCooldown = false;
         g_noCannonCooldownPatchReady = false;
-        Logf("No Cannon Cooldown disabled: byte at 0x%08X changed unexpectedly to 0x%02X.",
+        LogWarnf("No Cannon Cooldown disabled: byte at 0x%08X changed unexpectedly to 0x%02X.",
              kPatchNoCannonCooldownAddress,
              *patchAddress);
         return;
@@ -948,7 +1041,7 @@ void ApplyNoCannonCooldownPatch() {
     if (!WriteMemory(patchAddress, &desired, sizeof(desired))) {
         g_noCannonCooldown = false;
         g_noCannonCooldownPatchReady = false;
-        Log("No Cannon Cooldown disabled: failed to write patch byte.");
+        LogError("No Cannon Cooldown disabled: failed to write patch byte.");
     }
 }
 
@@ -967,7 +1060,7 @@ void ApplyStealthModePatch() {
         *patchAddress != kEnabledStealthModeByte) {
         g_stealthMode = false;
         g_stealthModePatchReady = false;
-        Logf("Stealth Mode disabled: byte at 0x%08X changed unexpectedly to 0x%02X.",
+        LogWarnf("Stealth Mode disabled: byte at 0x%08X changed unexpectedly to 0x%02X.",
              kPatchStealthModeAddress,
              *patchAddress);
         return;
@@ -975,7 +1068,7 @@ void ApplyStealthModePatch() {
     if (!WriteMemory(patchAddress, &desired, sizeof(desired))) {
         g_stealthMode = false;
         g_stealthModePatchReady = false;
-        Log("Stealth Mode disabled: failed to write patch byte.");
+        LogError("Stealth Mode disabled: failed to write patch byte.");
     }
 }
 
@@ -993,7 +1086,7 @@ void ApplyEagleVisionSprintPatch() {
         *g_eagleVisionSprintAddress != kEnabledEagleVisionSprintByte) {
         g_eagleVisionSprint = false;
         g_eagleVisionSprintPatchReady = false;
-        Logf("Allow Eagle Vision while sprinting disabled: byte at 0x%08X changed unexpectedly to 0x%02X.",
+        LogWarnf("Allow Eagle Vision while sprinting disabled: byte at 0x%08X changed unexpectedly to 0x%02X.",
              static_cast<unsigned int>(reinterpret_cast<std::uintptr_t>(g_eagleVisionSprintAddress)),
              *g_eagleVisionSprintAddress);
         return;
@@ -1001,7 +1094,7 @@ void ApplyEagleVisionSprintPatch() {
     if (!WriteMemory(g_eagleVisionSprintAddress, &desired, sizeof(desired))) {
         g_eagleVisionSprint = false;
         g_eagleVisionSprintPatchReady = false;
-        Log("Allow Eagle Vision while sprinting disabled: failed to write patch byte.");
+        LogError("Allow Eagle Vision while sprinting disabled: failed to write patch byte.");
     }
 }
 
@@ -1045,7 +1138,7 @@ void ApplyKillCiviliansNoDesyncPatch() {
     if (!site1Known || !site2Known || !warningCall1Known || !warningCall2Known) {
         g_killCiviliansNoDesync = false;
         g_killCiviliansNoDesyncPatchReady = false;
-        Log("Kill civilians without desynchronization disabled: patch bytes changed unexpectedly.");
+        LogWarn("Kill civilians without desynchronization disabled: patch bytes changed unexpectedly.");
         return;
     }
 
@@ -1055,13 +1148,13 @@ void ApplyKillCiviliansNoDesyncPatch() {
         !WriteMemory(warningCallAddress2, desiredWarningCall2, sizeof(kOriginalCivilianWarningCall2Bytes))) {
         g_killCiviliansNoDesync = false;
         g_killCiviliansNoDesyncPatchReady = false;
-        Log("Kill civilians without desynchronization disabled: failed to write patch bytes.");
+        LogError("Kill civilians without desynchronization disabled: failed to write patch bytes.");
     }
 }
 
 void DesynchronizeYourself() {
     if (!g_playerHealthPatchReady || g_playerHealthComponent == 0) {
-        Log("Desynchronize yourself unavailable: player health component has not been captured yet.");
+        LogWarn("Desynchronize yourself unavailable: player health component has not been captured yet.");
         return;
     }
 
@@ -1233,6 +1326,67 @@ void InitModuleDir() {
     }
 }
 
+bool CalculateFileSha256(const char* path, char* out, std::size_t outSize) {
+    if (!path || !out || outSize < 65) {
+        return false;
+    }
+    out[0] = '\0';
+
+    HANDLE file = CreateFileA(path,
+                              GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr,
+                              OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    HCRYPTPROV provider = 0;
+    HCRYPTHASH hash = 0;
+    bool ok = false;
+    if (CryptAcquireContextA(&provider, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT) &&
+        CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash)) {
+        std::uint8_t buffer[64 * 1024]{};
+        DWORD bytesRead = 0;
+        ok = true;
+        for (;;) {
+            if (!ReadFile(file, buffer, sizeof(buffer), &bytesRead, nullptr)) {
+                ok = false;
+                break;
+            }
+            if (bytesRead == 0) {
+                break;
+            }
+            if (!CryptHashData(hash, buffer, bytesRead, 0)) {
+                ok = false;
+                break;
+            }
+        }
+
+        std::uint8_t digest[32]{};
+        DWORD digestSize = sizeof(digest);
+        if (ok && CryptGetHashParam(hash, HP_HASHVAL, digest, &digestSize, 0) && digestSize == sizeof(digest)) {
+            for (DWORD i = 0; i < digestSize; ++i) {
+                sprintf_s(out + i * 2, outSize - i * 2, "%02X", digest[i]);
+            }
+            out[64] = '\0';
+        } else {
+            ok = false;
+        }
+    }
+
+    if (hash) {
+        CryptDestroyHash(hash);
+    }
+    if (provider) {
+        CryptReleaseContext(provider, 0);
+    }
+    CloseHandle(file);
+    return ok;
+}
+
 void InitGameInfo() {
     if (!GetModuleFileNameA(nullptr, g_gameExePath, MAX_PATH)) {
         return;
@@ -1263,6 +1417,23 @@ void InitGameInfo() {
                   systemTime.wHour,
                   systemTime.wMinute,
                   systemTime.wSecond);
+    }
+
+    if (!CalculateFileSha256(g_gameExePath, g_gameExeSha256Text, sizeof(g_gameExeSha256Text))) {
+        strcpy_s(g_gameExeSha256Text, "unknown");
+    }
+}
+
+void LogGameInfo() {
+    Logf("%s", g_gameExeName[0] ? g_gameExeName : "unknown executable");
+    Logf("Size: %s", g_gameExeSizeText);
+    Logf("Timestamp: %s", g_gameExeTimestampText);
+    Logf("SHA256: %s", g_gameExeSha256Text);
+
+    if (_stricmp(g_gameExeSha256Text, "unknown") == 0) {
+        LogWarn("Could not calculate game executable SHA256; supported build check is incomplete.");
+    } else if (_stricmp(g_gameExeSha256Text, kSupportedGameSha256) != 0) {
+        LogWarnf("Game executable SHA256 mismatch. Supported SHA256: %s", kSupportedGameSha256);
     }
 }
 
@@ -1341,7 +1512,7 @@ bool RefillSelectedInventoryEntry() {
              entry.name,
              entry.value);
     } else {
-        Logf("Refill failed for %s: inventory pointer is not ready.", entry.name);
+        LogWarnf("Refill failed for %s: inventory pointer is not ready.", entry.name);
     }
     return ok;
 }
@@ -1365,7 +1536,7 @@ bool RefillInventoryEntryToAmount(int entryIndex, int value) {
              entry.name,
              value);
     } else {
-        Logf("Custom refill failed for %s: inventory pointer is not ready.", entry.name);
+        LogWarnf("Custom refill failed for %s: inventory pointer is not ready.", entry.name);
     }
     return ok;
 }
@@ -1789,13 +1960,13 @@ bool FinishCommunityChallengeForUnlock(const UnlockEntry& entry) {
 
     const std::uintptr_t challengeRecordSlot = FindUnlockRecordSlot(challengeId);
     if (challengeRecordSlot == 0) {
-        Logf("%s community challenge not finished: challenge record was not found.", entry.name);
+        LogWarnf("%s community challenge not finished: challenge record was not found.", entry.name);
         return false;
     }
 
     std::uintptr_t listFound = 0;
     if (!FindCommunityChallengeList(&listFound)) {
-        Logf("%s community challenge not finished: challenge list was not found.", entry.name);
+        LogWarnf("%s community challenge not finished: challenge list was not found.", entry.name);
         return false;
     }
 
@@ -1806,21 +1977,21 @@ bool FinishCommunityChallengeForUnlock(const UnlockEntry& entry) {
         !TryReadWord(listFound + 0x14, &capacity) ||
         !TryReadPointer(listFound + 0x10, &listArray) ||
         length > 1760) {
-        Logf("%s community challenge not finished: challenge list metadata was invalid.", entry.name);
+        LogWarnf("%s community challenge not finished: challenge list metadata was invalid.", entry.name);
         return false;
     }
 
     if (!g_communityChallengeStorage) {
         g_communityChallengeStorage = AllocateCommunityMemory(8192);
         if (!g_communityChallengeStorage) {
-            Log("Community challenge storage allocation failed.");
+            LogError("Community challenge storage allocation failed.");
             return false;
         }
         g_communityChallengeNext = g_communityChallengeStorage + 0x400;
     }
 
     if (g_communityChallengeNext + 12 > g_communityChallengeStorage + 8192) {
-        Log("Community challenge storage is full.");
+        LogWarn("Community challenge storage is full.");
         return false;
     }
 
@@ -1830,7 +2001,7 @@ bool FinishCommunityChallengeForUnlock(const UnlockEntry& entry) {
     if (!TryReadPointer(listArray, &firstEntry) ||
         !TryReadDword(firstEntry, &const1) ||
         !TryReadDword(firstEntry + 0x08, &const2)) {
-        Logf("%s community challenge not finished: challenge list template was invalid.", entry.name);
+        LogWarnf("%s community challenge not finished: challenge list template was invalid.", entry.name);
         return false;
     }
 
@@ -1838,7 +2009,7 @@ bool FinishCommunityChallengeForUnlock(const UnlockEntry& entry) {
         const std::size_t expandedSize = static_cast<std::size_t>(capacity) * sizeof(std::uint32_t) + 100;
         std::uint8_t* expanded = AllocateCommunityMemory(expandedSize);
         if (!expanded) {
-            Log("Community challenge list expansion allocation failed.");
+            LogError("Community challenge list expansion allocation failed.");
             return false;
         }
         memcpy(expanded, reinterpret_cast<void*>(listArray), static_cast<std::size_t>(length) * sizeof(std::uint32_t));
@@ -2575,7 +2746,7 @@ void ProcessHotkeys() {
 bool InstallHealthPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchHealthAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing ship godmode patch: 0x01225C3F is already hooked by another tool.");
+        LogWarn("Refusing ship godmode patch: 0x01225C3F is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalHealthBytes, sizeof(kOriginalHealthBytes))) {
@@ -2589,7 +2760,7 @@ bool InstallHealthPatch() {
     g_cave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_cave) {
-        Log("VirtualAlloc failed.");
+        LogError("VirtualAlloc failed.");
         return false;
     }
 
@@ -2644,7 +2815,7 @@ bool InstallHealthPatch() {
     p += 4;
 
     if (!WriteJump(patchAddress, g_cave, sizeof(kOriginalHealthBytes))) {
-        Log("Refusing ship godmode patch: failed to write hook at 0x01225C3F.");
+        LogError("Refusing ship godmode patch: failed to write hook at 0x01225C3F.");
         return false;
     }
     return true;
@@ -2653,7 +2824,7 @@ bool InstallHealthPatch() {
 bool InstallNoCannonCooldownPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchNoCannonCooldownAddress);
     if (*patchAddress == kEnabledNoCannonCooldownByte) {
-        Log("Refusing No Cannon Cooldown patch: 0x01C97031 is already patched by another tool.");
+        LogWarn("Refusing No Cannon Cooldown patch: 0x01C97031 is already patched by another tool.");
         return false;
     }
     if (*patchAddress != kOriginalNoCannonCooldownByte) {
@@ -2671,7 +2842,7 @@ bool InstallNoCannonCooldownPatch() {
 bool InstallStealthModePatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchStealthModeAddress);
     if (*patchAddress == kEnabledStealthModeByte) {
-        Log("Refusing Stealth Mode patch: 0x0101CB66 is already patched by another tool.");
+        LogWarn("Refusing Stealth Mode patch: 0x0101CB66 is already patched by another tool.");
         return false;
     }
     if (*patchAddress != kOriginalStealthModeByte) {
@@ -2689,7 +2860,7 @@ bool InstallStealthModePatch() {
 bool InstallAllyGodmodePatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchAllyGodmodeAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing Ally Godmode patch: 0x01BFF520 is already hooked by another tool.");
+        LogWarn("Refusing Ally Godmode patch: 0x01BFF520 is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalAllyGodmodeBytes, sizeof(kOriginalAllyGodmodeBytes))) {
@@ -2703,7 +2874,7 @@ bool InstallAllyGodmodePatch() {
     g_allyGodmodeCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_allyGodmodeCave) {
-        Log("VirtualAlloc failed for Ally Godmode patch.");
+        LogError("VirtualAlloc failed for Ally Godmode patch.");
         return false;
     }
 
@@ -2751,7 +2922,7 @@ bool InstallAllyGodmodePatch() {
     p += sizeof(kOriginalAllyGodmodeBytes);
 
     if (!WriteJump(patchAddress, g_allyGodmodeCave, sizeof(kOriginalAllyGodmodeBytes))) {
-        Log("Refusing Ally Godmode patch: failed to write hook at 0x01BFF520.");
+        LogError("Refusing Ally Godmode patch: failed to write hook at 0x01BFF520.");
         return false;
     }
     Log("Installed Ally Godmode hook at 0x01BFF520.");
@@ -2761,7 +2932,7 @@ bool InstallAllyGodmodePatch() {
 bool InstallTimeIntervalPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchTimeIntervalAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing TimeScale interval patch: 0x00A047EA is already hooked by another ASI.");
+        LogWarn("Refusing TimeScale interval patch: 0x00A047EA is already hooked by another ASI.");
         return false;
     }
 
@@ -2776,7 +2947,7 @@ bool InstallTimeIntervalPatch() {
     g_timeIntervalCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_timeIntervalCave) {
-        Log("VirtualAlloc failed for TimeScale interval patch.");
+        LogError("VirtualAlloc failed for TimeScale interval patch.");
         return false;
     }
 
@@ -2801,7 +2972,7 @@ bool InstallTimeIntervalPatch() {
     p += 4;
 
     if (!WriteJump(patchAddress, g_timeIntervalCave, sizeof(kOriginalTimeIntervalBytes))) {
-        Log("Refusing TimeScale interval patch: failed to write hook at 0x00A047EA.");
+        LogError("Refusing TimeScale interval patch: failed to write hook at 0x00A047EA.");
         return false;
     }
     Log("Installed standalone TimeScale interval hook at 0x00A047EA.");
@@ -2811,7 +2982,7 @@ bool InstallTimeIntervalPatch() {
 bool InstallPlayerHealthPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchPlayerHealthAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing player godmode patch: 0x0115AD07 is already hooked by another tool.");
+        LogWarn("Refusing player godmode patch: 0x0115AD07 is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalPlayerHealthBytes, sizeof(kOriginalPlayerHealthBytes))) {
@@ -2825,7 +2996,7 @@ bool InstallPlayerHealthPatch() {
     g_playerHealthCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_playerHealthCave) {
-        Log("VirtualAlloc failed for player godmode patch.");
+        LogError("VirtualAlloc failed for player godmode patch.");
         return false;
     }
 
@@ -2878,7 +3049,7 @@ bool InstallPlayerHealthPatch() {
     EmitJump(p, kPatchPlayerHealthReturnAddress);
 
     if (!WriteJump(patchAddress, g_playerHealthCave, sizeof(kOriginalPlayerHealthBytes))) {
-        Log("Refusing player godmode patch: failed to write hook at 0x0115AD07.");
+        LogError("Refusing player godmode patch: failed to write hook at 0x0115AD07.");
         return false;
     }
     Log("Installed player godmode hook at 0x0115AD07.");
@@ -2888,7 +3059,7 @@ bool InstallPlayerHealthPatch() {
 bool InstallInfiniteBreathPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchInfiniteBreathAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing Infinite Breath patch: 0x01148936 is already hooked by another tool.");
+        LogWarn("Refusing Infinite Breath patch: 0x01148936 is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalInfiniteBreathBytes, sizeof(kOriginalInfiniteBreathBytes))) {
@@ -2902,7 +3073,7 @@ bool InstallInfiniteBreathPatch() {
     g_infiniteBreathCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_infiniteBreathCave) {
-        Log("VirtualAlloc failed for Infinite Breath patch.");
+        LogError("VirtualAlloc failed for Infinite Breath patch.");
         return false;
     }
 
@@ -2941,7 +3112,7 @@ bool InstallInfiniteBreathPatch() {
     EmitJump(p, kPatchInfiniteBreathReturnAddress);
 
     if (!WriteJump(patchAddress, g_infiniteBreathCave, sizeof(kOriginalInfiniteBreathBytes))) {
-        Log("Refusing Infinite Breath patch: failed to write hook at 0x01148936.");
+        LogError("Refusing Infinite Breath patch: failed to write hook at 0x01148936.");
         return false;
     }
     Log("Installed Infinite Breath hook at 0x01148936.");
@@ -2951,11 +3122,11 @@ bool InstallInfiniteBreathPatch() {
 bool InstallNoFallDamagePatch() {
     auto* patchAddress = FindMainModulePattern(kFallDamagePattern, sizeof(kFallDamagePattern));
     if (!patchAddress) {
-        Log("Refusing No Fall Damage patch: fall damage AOB was not found.");
+        LogWarn("Refusing No Fall Damage patch: fall damage AOB was not found.");
         return false;
     }
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing No Fall Damage patch: fall damage site is already hooked by another tool.");
+        LogWarn("Refusing No Fall Damage patch: fall damage site is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalFallDamageBytes, sizeof(kOriginalFallDamageBytes))) {
@@ -2969,7 +3140,7 @@ bool InstallNoFallDamagePatch() {
     g_noFallDamageCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_noFallDamageCave) {
-        Log("VirtualAlloc failed for No Fall Damage patch.");
+        LogError("VirtualAlloc failed for No Fall Damage patch.");
         return false;
     }
 
@@ -3018,7 +3189,7 @@ bool InstallNoFallDamagePatch() {
     EmitJump(p, reinterpret_cast<std::uintptr_t>(patchAddress + sizeof(kOriginalFallDamageBytes)));
 
     if (!WriteJump(patchAddress, g_noFallDamageCave, sizeof(kOriginalFallDamageBytes))) {
-        Log("Refusing No Fall Damage patch: failed to write fall damage hook.");
+        LogError("Refusing No Fall Damage patch: failed to write fall damage hook.");
         return false;
     }
 
@@ -3030,7 +3201,7 @@ bool InstallNoFallDamagePatch() {
 bool InstallEagleVisionSprintPatch() {
     auto* patchAddress = FindMainModulePattern(kEagleVisionSprintPattern, sizeof(kEagleVisionSprintPattern));
     if (!patchAddress) {
-        Log("Refusing Allow Eagle Vision while sprinting patch: AOB was not found.");
+        LogWarn("Refusing Allow Eagle Vision while sprinting patch: AOB was not found.");
         return false;
     }
     if (*patchAddress != kOriginalEagleVisionSprintByte) {
@@ -3051,7 +3222,7 @@ bool InstallKillCiviliansNoDesyncPatch() {
     auto* patchAddress1 = FindMainModulePattern(kCivilianDesyncPattern1, sizeof(kCivilianDesyncPattern1));
     auto* patchAddress2 = FindMainModulePattern(kCivilianDesyncPattern2, sizeof(kCivilianDesyncPattern2));
     if (!patchAddress1 || !patchAddress2) {
-        Log("Refusing Kill civilians without desynchronization patch: one or more AOBs were not found.");
+        LogWarn("Refusing Kill civilians without desynchronization patch: one or more AOBs were not found.");
         return false;
     }
     if (!BytesMatch(patchAddress1, kOriginalCivilianDesyncBytes, sizeof(kOriginalCivilianDesyncBytes))) {
@@ -3098,7 +3269,7 @@ bool InstallKillCiviliansNoDesyncPatch() {
 bool InstallShowCollectiblesPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchShowCollectiblesAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing Show collectibles patch: 0x014C1D84 is already hooked by another tool.");
+        LogWarn("Refusing Show collectibles patch: 0x014C1D84 is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalShowCollectiblesBytes, sizeof(kOriginalShowCollectiblesBytes))) {
@@ -3112,7 +3283,7 @@ bool InstallShowCollectiblesPatch() {
     g_showCollectiblesCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 96, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_showCollectiblesCave) {
-        Log("VirtualAlloc failed for Show collectibles patch.");
+        LogError("VirtualAlloc failed for Show collectibles patch.");
         return false;
     }
 
@@ -3134,7 +3305,7 @@ bool InstallShowCollectiblesPatch() {
     EmitJump(p, kPatchShowCollectiblesReturnAddress);
 
     if (!WriteJump(patchAddress, g_showCollectiblesCave, sizeof(kOriginalShowCollectiblesBytes))) {
-        Log("Refusing Show collectibles patch: failed to write hook at 0x014C1D84.");
+        LogError("Refusing Show collectibles patch: failed to write hook at 0x014C1D84.");
         return false;
     }
 
@@ -3148,7 +3319,7 @@ bool InstallLockConsumablesPatch() {
     }
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchLockConsumablesAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing Lock Consumables patch: 0x011A1F6D is already hooked by another tool.");
+        LogWarn("Refusing Lock Consumables patch: 0x011A1F6D is already hooked by another tool.");
         g_lockConsumablesInstallFailed = true;
         return false;
     }
@@ -3164,7 +3335,7 @@ bool InstallLockConsumablesPatch() {
     g_lockConsumablesCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 80, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_lockConsumablesCave) {
-        Log("VirtualAlloc failed for Lock Consumables patch.");
+        LogError("VirtualAlloc failed for Lock Consumables patch.");
         g_lockConsumablesInstallFailed = true;
         return false;
     }
@@ -3197,7 +3368,7 @@ bool InstallLockConsumablesPatch() {
     EmitJump(p, kPatchLockConsumablesReturnAddress);
 
     if (!WriteJump(patchAddress, g_lockConsumablesCave, sizeof(kOriginalLockConsumablesBytes))) {
-        Log("Refusing Lock Consumables patch: failed to write hook at 0x011A1F6D.");
+        LogError("Refusing Lock Consumables patch: failed to write hook at 0x011A1F6D.");
         g_lockConsumablesInstallFailed = true;
         return false;
     }
@@ -3210,7 +3381,7 @@ bool InstallLockConsumablesPatch() {
 bool InstallInventoryPointerPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchInventoryPointerAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing inventory pointer patch: 0x01CFD381 is already hooked by another tool.");
+        LogWarn("Refusing inventory pointer patch: 0x01CFD381 is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalInventoryPointerBytes, sizeof(kOriginalInventoryPointerBytes))) {
@@ -3224,7 +3395,7 @@ bool InstallInventoryPointerPatch() {
     g_inventoryPointerCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 192, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_inventoryPointerCave) {
-        Log("VirtualAlloc failed for inventory pointer patch.");
+        LogError("VirtualAlloc failed for inventory pointer patch.");
         return false;
     }
 
@@ -3297,7 +3468,7 @@ bool InstallInventoryPointerPatch() {
     EmitJump(p, kPatchInventoryPointerReturnAddress);
 
     if (!WriteJump(patchAddress, g_inventoryPointerCave, sizeof(kOriginalInventoryPointerBytes))) {
-        Log("Refusing inventory pointer patch: failed to write hook at 0x01CFD381.");
+        LogError("Refusing inventory pointer patch: failed to write hook at 0x01CFD381.");
         return false;
     }
     Log("Installed inventory pointer hook at 0x01CFD381.");
@@ -3307,7 +3478,7 @@ bool InstallInventoryPointerPatch() {
 bool InstallNoclipUpdatePatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchNoclipUpdateAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing noclip update patch: 0x016FAACD is already hooked by another ASI.");
+        LogWarn("Refusing noclip update patch: 0x016FAACD is already hooked by another ASI.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalNoclipUpdateBytes, sizeof(kOriginalNoclipUpdateBytes))) {
@@ -3321,7 +3492,7 @@ bool InstallNoclipUpdatePatch() {
     g_noclipUpdateCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_noclipUpdateCave) {
-        Log("VirtualAlloc failed for noclip update patch.");
+        LogError("VirtualAlloc failed for noclip update patch.");
         return false;
     }
 
@@ -3343,7 +3514,7 @@ bool InstallNoclipUpdatePatch() {
     EmitJump(p, kPatchNoclipUpdateReturnAddress);
 
     if (!WriteJump(patchAddress, g_noclipUpdateCave, sizeof(kOriginalNoclipUpdateBytes))) {
-        Log("Refusing noclip update patch: failed to write hook at 0x016FAACD.");
+        LogError("Refusing noclip update patch: failed to write hook at 0x016FAACD.");
         return false;
     }
     Log("Installed noclip update hook at 0x016FAACD.");
@@ -3357,7 +3528,7 @@ bool InstallFreeCamPatch() {
 
     auto* rootPattern = FindMainModulePattern(kFreeCamRootPattern, sizeof(kFreeCamRootPattern));
     if (!rootPattern) {
-        Log("Free Cam unavailable: camera root signature was not found.");
+        LogWarn("Free Cam unavailable: camera root signature was not found.");
         g_freeCamInstallFailed = true;
         return false;
     }
@@ -3365,12 +3536,12 @@ bool InstallFreeCamPatch() {
 
     g_freeCamTransformAddress = FindMainModulePattern(kFreeCamTransformPattern, sizeof(kFreeCamTransformPattern));
     if (!g_freeCamTransformAddress) {
-        Log("Free Cam unavailable: transform signature was not found.");
+        LogWarn("Free Cam unavailable: transform signature was not found.");
         g_freeCamInstallFailed = true;
         return false;
     }
     if (g_freeCamTransformAddress[0] == 0xE9) {
-        Log("Refusing Free Cam transform patch: target is already hooked by another tool.");
+        LogWarn("Refusing Free Cam transform patch: target is already hooked by another tool.");
         g_freeCamInstallFailed = true;
         return false;
     }
@@ -3387,13 +3558,13 @@ bool InstallFreeCamPatch() {
 
     auto* cameraPattern = FindMainModulePattern(kFreeCamCameraPattern, sizeof(kFreeCamCameraPattern));
     if (!cameraPattern) {
-        Log("Free Cam unavailable: camera orientation signature was not found.");
+        LogWarn("Free Cam unavailable: camera orientation signature was not found.");
         g_freeCamInstallFailed = true;
         return false;
     }
     g_freeCamCameraAddress = cameraPattern + kFreeCamCameraPatchOffset;
     if (g_freeCamCameraAddress[0] == 0xE9) {
-        Log("Refusing Free Cam camera patch: target is already hooked by another tool.");
+        LogWarn("Refusing Free Cam camera patch: target is already hooked by another tool.");
         g_freeCamInstallFailed = true;
         return false;
     }
@@ -3413,7 +3584,7 @@ bool InstallFreeCamPatch() {
     g_freeCamCameraCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 96, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_freeCamTransformCave || !g_freeCamCameraCave) {
-        Log("VirtualAlloc failed for Free Cam patch.");
+        LogError("VirtualAlloc failed for Free Cam patch.");
         g_freeCamInstallFailed = true;
         return false;
     }
@@ -3506,14 +3677,14 @@ bool InstallFreeCamPatch() {
     if (!WriteJump(g_freeCamTransformAddress,
                    g_freeCamTransformCave,
                    sizeof(kOriginalFreeCamTransformBytes))) {
-        Log("Refusing Free Cam transform patch: failed to write hook.");
+        LogError("Refusing Free Cam transform patch: failed to write hook.");
         g_freeCamInstallFailed = true;
         return false;
     }
     if (!WriteJump(g_freeCamCameraAddress,
                    g_freeCamCameraCave,
                    sizeof(kOriginalFreeCamCameraBytes))) {
-        Log("Refusing Free Cam camera patch: failed to write hook.");
+        LogError("Refusing Free Cam camera patch: failed to write hook.");
         g_freeCamInstallFailed = true;
         return false;
     }
@@ -3536,7 +3707,7 @@ bool InstallGlobalHiddenUnlockPatch() {
     auto* write2Pattern = FindMainModulePattern(kGlobalHiddenUnlockWrite2Pattern, sizeof(kGlobalHiddenUnlockWrite2Pattern));
     auto* visibilityPattern = FindMainModulePattern(kGlobalHiddenUnlockVisibilityPattern, sizeof(kGlobalHiddenUnlockVisibilityPattern));
     if (!write1Pattern || !write2Pattern || !visibilityPattern) {
-        Log("Global Hidden Unlocks unavailable: signatures were not found.");
+        LogWarn("Global Hidden Unlocks unavailable: signatures were not found.");
         return false;
     }
 
@@ -3553,14 +3724,14 @@ bool InstallGlobalHiddenUnlockPatch() {
         !BytesMatch(g_globalHiddenUnlockVisibilityAddress,
                     kOriginalGlobalHiddenUnlockVisibilityBytes,
                     sizeof(kOriginalGlobalHiddenUnlockVisibilityBytes))) {
-        Log("Global Hidden Unlocks unavailable: patch bytes are not in their original state.");
+        LogWarn("Global Hidden Unlocks unavailable: patch bytes are not in their original state.");
         return false;
     }
 
     g_globalHiddenUnlockCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_globalHiddenUnlockCave) {
-        Log("VirtualAlloc failed for Global Hidden Unlocks patch.");
+        LogError("VirtualAlloc failed for Global Hidden Unlocks patch.");
         return false;
     }
 
@@ -3584,7 +3755,7 @@ bool InstallGlobalHiddenUnlockPatch() {
         !WriteMemory(g_globalHiddenUnlockVisibilityAddress,
                      kEnabledGlobalHiddenUnlockVisibilityBytes,
                      sizeof(kEnabledGlobalHiddenUnlockVisibilityBytes))) {
-        Log("Global Hidden Unlocks failed: could not write patches.");
+        LogError("Global Hidden Unlocks failed: could not write patches.");
         return false;
     }
 
@@ -3599,7 +3770,7 @@ bool InstallGlobalHiddenUnlockPatch() {
 bool InstallNoReloadPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchNoReloadAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing No Reload patch: 0x016B8A96 is already hooked by another tool.");
+        LogWarn("Refusing No Reload patch: 0x016B8A96 is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalNoReloadBytes, sizeof(kOriginalNoReloadBytes))) {
@@ -3613,7 +3784,7 @@ bool InstallNoReloadPatch() {
     g_noReloadCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 96, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_noReloadCave) {
-        Log("VirtualAlloc failed for No Reload patch.");
+        LogError("VirtualAlloc failed for No Reload patch.");
         return false;
     }
 
@@ -3649,7 +3820,7 @@ bool InstallNoReloadPatch() {
     EmitJump(p, kPatchNoReloadReturnAddress);
 
     if (!WriteJump(patchAddress, g_noReloadCave, sizeof(kOriginalNoReloadBytes))) {
-        Log("Refusing No Reload patch: failed to write hook at 0x016B8A96.");
+        LogError("Refusing No Reload patch: failed to write hook at 0x016B8A96.");
         return false;
     }
     Log("Installed No Reload hook at 0x016B8A96.");
@@ -3659,7 +3830,7 @@ bool InstallNoReloadPatch() {
 bool InstallMissionTimerPatch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchMissionTimerAddress);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing Mission Timer patch: 0x019446C3 is already hooked by another tool.");
+        LogWarn("Refusing Mission Timer patch: 0x019446C3 is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalMissionTimerBytes, sizeof(kOriginalMissionTimerBytes))) {
@@ -3673,7 +3844,7 @@ bool InstallMissionTimerPatch() {
     g_missionTimerCave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 192, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_missionTimerCave) {
-        Log("VirtualAlloc failed for Mission Timer patch.");
+        LogError("VirtualAlloc failed for Mission Timer patch.");
         return false;
     }
 
@@ -3713,7 +3884,7 @@ bool InstallMissionTimerPatch() {
     EmitJump(p, kPatchMissionTimerReturnAddress);
 
     if (!WriteJump(patchAddress, g_missionTimerCave, sizeof(kOriginalMissionTimerBytes))) {
-        Log("Refusing Mission Timer patch: failed to write hook at 0x019446C3.");
+        LogError("Refusing Mission Timer patch: failed to write hook at 0x019446C3.");
         return false;
     }
     Log("Installed Mission Timer hook at 0x019446C3.");
@@ -3723,7 +3894,7 @@ bool InstallMissionTimerPatch() {
 bool InstallMissionTimer2Patch() {
     auto* patchAddress = reinterpret_cast<std::uint8_t*>(kPatchMissionTimer2Address);
     if (patchAddress[0] == 0xE9) {
-        Log("Refusing Mission Timer II patch: 0x016869B7 is already hooked by another tool.");
+        LogWarn("Refusing Mission Timer II patch: 0x016869B7 is already hooked by another tool.");
         return false;
     }
     if (!BytesMatch(patchAddress, kOriginalMissionTimer2Bytes, sizeof(kOriginalMissionTimer2Bytes))) {
@@ -3737,7 +3908,7 @@ bool InstallMissionTimer2Patch() {
     g_missionTimer2Cave = static_cast<std::uint8_t*>(
         VirtualAlloc(nullptr, 192, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (!g_missionTimer2Cave) {
-        Log("VirtualAlloc failed for Mission Timer II patch.");
+        LogError("VirtualAlloc failed for Mission Timer II patch.");
         return false;
     }
 
@@ -3777,7 +3948,7 @@ bool InstallMissionTimer2Patch() {
     EmitJump(p, kPatchMissionTimer2ReturnAddress);
 
     if (!WriteJump(patchAddress, g_missionTimer2Cave, sizeof(kOriginalMissionTimer2Bytes))) {
-        Log("Refusing Mission Timer II patch: failed to write hook at 0x016869B7.");
+        LogError("Refusing Mission Timer II patch: failed to write hook at 0x016869B7.");
         return false;
     }
     Log("Installed Mission Timer II hook at 0x016869B7.");
@@ -3861,7 +4032,7 @@ bool InstallPatches() {
         !g_missionTimersPatchReady &&
         !g_inventoryPointerPatchReady &&
         !g_noclipPatchReady) {
-        Log("No gameplay patches installed; UI will load with features unavailable.");
+        LogWarn("No gameplay patches installed; UI will load with features unavailable.");
         return false;
     }
     g_installed = true;
@@ -3919,12 +4090,28 @@ void ApplyRedStyle() {
     colors[ImGuiCol_TabActive] = ImVec4(0.48f, 0.12f, 0.16f, 1.00f);
 }
 
-void CreateRenderTarget(IDXGISwapChain* swapChain) {
-    ID3D11Texture2D* backBuffer = nullptr;
-    if (SUCCEEDED(swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&backBuffer)))) {
-        g_device->CreateRenderTargetView(backBuffer, nullptr, &g_renderTarget);
-        backBuffer->Release();
+void ReleaseRenderTarget() {
+    if (g_renderTarget) {
+        g_renderTarget->Release();
+        g_renderTarget = nullptr;
     }
+}
+
+bool CreateRenderTarget(IDXGISwapChain* swapChain) {
+    ReleaseRenderTarget();
+    ID3D11Texture2D* backBuffer = nullptr;
+    if (FAILED(swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&backBuffer))) ||
+        !backBuffer) {
+        LogWarn("DX11 back buffer unavailable; AC4Tools UI render target was not created.");
+        return false;
+    }
+    const HRESULT hr = g_device->CreateRenderTargetView(backBuffer, nullptr, &g_renderTarget);
+    backBuffer->Release();
+    if (FAILED(hr) || !g_renderTarget) {
+        LogWarn("DX11 render target creation failed; AC4Tools UI may not be visible.");
+        return false;
+    }
+    return true;
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -4019,7 +4206,11 @@ bool InitImGui(IDXGISwapChain* swapChain) {
         SetWindowLongPtrA(g_gameWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProc)));
     g_imguiReady = true;
     Log("Dear ImGui DX11 overlay initialized.");
-    Log(g_installed ? "AC4Tools patches installed." : "AC4Tools patches not installed.");
+    if (g_installed) {
+        Log("AC4Tools patches installed.");
+    } else {
+        LogWarn("AC4Tools patches not installed.");
+    }
     return true;
 }
 
@@ -4859,6 +5050,7 @@ void DrawMenu() {
                 DrawInfoRow("Game path", g_gameExePath[0] ? g_gameExePath : "unknown");
                 DrawInfoRow("Game size", g_gameExeSizeText);
                 DrawInfoRow("Game timestamp", g_gameExeTimestampText);
+                DrawInfoRow("Game SHA256", g_gameExeSha256Text);
                 DrawInfoRow("Supported exe", kSupportedGameExe);
                 DrawInfoRow("Supported size", kSupportedGameSize);
                 DrawInfoRow("Supported timestamp", kSupportedGameTimestamp);
@@ -4936,6 +5128,7 @@ HRESULT __stdcall HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT
         (QueryPhysicalKeyState(g_menuHotkey) & 0x8000) != 0;
     if (menuIsDown && !menuWasDown) {
         g_menuOpen = !g_menuOpen;
+        Logf("Menu %s from hotkey %s.", g_menuOpen ? "opened" : "closed", HotkeyName(g_menuHotkey));
         RefreshInputCaptureState();
         if (!g_menuOpen) {
             ReleaseMenuInputState();
@@ -4970,11 +5163,46 @@ HRESULT __stdcall HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT
         }
 
         ImGui::Render();
-        g_context->OMSetRenderTargets(1, &g_renderTarget, nullptr);
-        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        if (!g_renderTarget) {
+            CreateRenderTarget(swapChain);
+        }
+        if (g_renderTarget) {
+            g_context->OMSetRenderTargets(1, &g_renderTarget, nullptr);
+            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        }
     }
 
     return g_originalPresent(swapChain, syncInterval, flags);
+}
+
+HRESULT __stdcall HookResizeBuffers(IDXGISwapChain* swapChain,
+                                    UINT bufferCount,
+                                    UINT width,
+                                    UINT height,
+                                    DXGI_FORMAT newFormat,
+                                    UINT swapChainFlags) {
+    if (g_imguiReady) {
+        ImGui_ImplDX11_InvalidateDeviceObjects();
+        ReleaseRenderTarget();
+        Logf("DX11 swap chain resize detected: %ux%u.", width, height);
+    }
+
+    const HRESULT hr = g_originalResizeBuffers(
+        swapChain,
+        bufferCount,
+        width,
+        height,
+        newFormat,
+        swapChainFlags);
+
+    if (SUCCEEDED(hr) && g_imguiReady) {
+        CreateRenderTarget(swapChain);
+        ImGui_ImplDX11_CreateDeviceObjects();
+    } else if (FAILED(hr)) {
+        LogWarnf("DX11 ResizeBuffers failed: HRESULT=0x%08X.", static_cast<unsigned int>(hr));
+    }
+
+    return hr;
 }
 
 LRESULT CALLBACK DummyWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -5017,22 +5245,31 @@ bool InstallDx11Hook() {
                                                &context);
     if (FAILED(hr)) {
         DestroyWindow(hwnd);
-        Log("D3D11CreateDeviceAndSwapChain dummy creation failed.");
+        LogError("D3D11CreateDeviceAndSwapChain dummy creation failed.");
         return false;
     }
 
     void** vtable = *reinterpret_cast<void***>(swapChain);
     void* present = vtable[8];
+    void* resizeBuffers = vtable[13];
 
     if (MH_Initialize() != MH_OK && MH_Initialize() != MH_ERROR_ALREADY_INITIALIZED) {
-        Log("MinHook initialize failed.");
+        LogError("MinHook initialize failed.");
     }
     if (MH_CreateHook(present, &HookPresent, reinterpret_cast<void**>(&g_originalPresent)) != MH_OK) {
-        Log("MinHook CreateHook Present failed.");
+        LogError("MinHook CreateHook Present failed.");
     } else if (MH_EnableHook(present) != MH_OK) {
-        Log("MinHook EnableHook Present failed.");
+        LogError("MinHook EnableHook Present failed.");
     } else {
         Log("DX11 Present hook installed.");
+    }
+
+    if (MH_CreateHook(resizeBuffers, &HookResizeBuffers, reinterpret_cast<void**>(&g_originalResizeBuffers)) != MH_OK) {
+        LogWarn("MinHook CreateHook ResizeBuffers failed.");
+    } else if (MH_EnableHook(resizeBuffers) != MH_OK) {
+        LogWarn("MinHook EnableHook ResizeBuffers failed.");
+    } else {
+        Log("DX11 ResizeBuffers hook installed.");
     }
 
     swapChain->Release();
@@ -5145,7 +5382,7 @@ bool InstallDirectInputHook() {
                                     reinterpret_cast<void**>(&directInput),
                                     nullptr);
     if (FAILED(hr) || !directInput) {
-        Log("DirectInput8Create failed for hook discovery.");
+        LogWarn("DirectInput8Create failed for hook discovery.");
         return false;
     }
 
@@ -5153,7 +5390,7 @@ bool InstallDirectInputHook() {
     hr = directInput->CreateDevice(GUID_SysMouse, &mouse, nullptr);
     if (FAILED(hr) || !mouse) {
         directInput->Release();
-        Log("DirectInput CreateDevice(GUID_SysMouse) failed for hook discovery.");
+        LogWarn("DirectInput CreateDevice(GUID_SysMouse) failed for hook discovery.");
         return false;
     }
 
@@ -5162,7 +5399,7 @@ bool InstallDirectInputHook() {
     if (FAILED(hr) || !keyboard) {
         mouse->Release();
         directInput->Release();
-        Log("DirectInput CreateDevice(GUID_SysKeyboard) failed for hook discovery.");
+        LogWarn("DirectInput CreateDevice(GUID_SysKeyboard) failed for hook discovery.");
         return false;
     }
 
@@ -5174,21 +5411,21 @@ bool InstallDirectInputHook() {
     void* keyboardGetDeviceData = keyboardVtable[10];
 
     if (MH_Initialize() != MH_OK && MH_Initialize() != MH_ERROR_ALREADY_INITIALIZED) {
-        Log("MinHook initialize failed for DirectInput.");
+        LogWarn("MinHook initialize failed for DirectInput.");
     }
 
     if (MH_CreateHook(mouseGetDeviceState, &HookGetDeviceState, reinterpret_cast<void**>(&g_originalGetDeviceStateMouse)) == MH_OK &&
         MH_EnableHook(mouseGetDeviceState) == MH_OK) {
         Log("DirectInput mouse GetDeviceState hook installed.");
     } else {
-        Log("DirectInput mouse GetDeviceState hook failed.");
+        LogWarn("DirectInput mouse GetDeviceState hook failed.");
     }
 
     if (MH_CreateHook(mouseGetDeviceData, &HookGetDeviceData, reinterpret_cast<void**>(&g_originalGetDeviceDataMouse)) == MH_OK &&
         MH_EnableHook(mouseGetDeviceData) == MH_OK) {
         Log("DirectInput mouse GetDeviceData hook installed.");
     } else {
-        Log("DirectInput mouse GetDeviceData hook failed.");
+        LogWarn("DirectInput mouse GetDeviceData hook failed.");
     }
 
     if (keyboardGetDeviceState == mouseGetDeviceState) {
@@ -5198,7 +5435,7 @@ bool InstallDirectInputHook() {
                MH_EnableHook(keyboardGetDeviceState) == MH_OK) {
         Log("DirectInput keyboard GetDeviceState hook installed.");
     } else {
-        Log("DirectInput keyboard GetDeviceState hook failed.");
+        LogWarn("DirectInput keyboard GetDeviceState hook failed.");
     }
 
     if (keyboardGetDeviceData == mouseGetDeviceData) {
@@ -5208,7 +5445,7 @@ bool InstallDirectInputHook() {
                MH_EnableHook(keyboardGetDeviceData) == MH_OK) {
         Log("DirectInput keyboard GetDeviceData hook installed.");
     } else {
-        Log("DirectInput keyboard GetDeviceData hook failed.");
+        LogWarn("DirectInput keyboard GetDeviceData hook failed.");
     }
 
     keyboard->Release();
@@ -5220,7 +5457,7 @@ bool InstallDirectInputHook() {
 bool InstallKeyboardStateHooks() {
     HMODULE user32 = GetModuleHandleA("user32.dll");
     if (!user32) {
-        Log("user32.dll not available for keyboard state hooks.");
+        LogWarn("user32.dll not available for keyboard state hooks.");
         return false;
     }
 
@@ -5228,33 +5465,33 @@ bool InstallKeyboardStateHooks() {
     void* getKeyState = reinterpret_cast<void*>(GetProcAddress(user32, "GetKeyState"));
     void* getKeyboardState = reinterpret_cast<void*>(GetProcAddress(user32, "GetKeyboardState"));
     if (!getAsyncKeyState || !getKeyState || !getKeyboardState) {
-        Log("Keyboard state hook discovery failed.");
+        LogWarn("Keyboard state hook discovery failed.");
         return false;
     }
 
     if (MH_Initialize() != MH_OK && MH_Initialize() != MH_ERROR_ALREADY_INITIALIZED) {
-        Log("MinHook initialize failed for keyboard state hooks.");
+        LogWarn("MinHook initialize failed for keyboard state hooks.");
     }
 
     if (MH_CreateHook(getAsyncKeyState, &HookGetAsyncKeyState, reinterpret_cast<void**>(&g_originalGetAsyncKeyState)) == MH_OK &&
         MH_EnableHook(getAsyncKeyState) == MH_OK) {
         Log("GetAsyncKeyState hook installed.");
     } else {
-        Log("GetAsyncKeyState hook failed.");
+        LogWarn("GetAsyncKeyState hook failed.");
     }
 
     if (MH_CreateHook(getKeyState, &HookGetKeyState, reinterpret_cast<void**>(&g_originalGetKeyState)) == MH_OK &&
         MH_EnableHook(getKeyState) == MH_OK) {
         Log("GetKeyState hook installed.");
     } else {
-        Log("GetKeyState hook failed.");
+        LogWarn("GetKeyState hook failed.");
     }
 
     if (MH_CreateHook(getKeyboardState, &HookGetKeyboardState, reinterpret_cast<void**>(&g_originalGetKeyboardState)) == MH_OK &&
         MH_EnableHook(getKeyboardState) == MH_OK) {
         Log("GetKeyboardState hook installed.");
     } else {
-        Log("GetKeyboardState hook failed.");
+        LogWarn("GetKeyboardState hook failed.");
     }
 
     return true;
@@ -5274,14 +5511,21 @@ void InitConsole() {
     if (!AllocConsole()) {
         return;
     }
-    SetConsoleTitleA("AC4Tools v1.04 Log");
+    SetConsoleTitleA("AC4Tools v1.05 Log");
     freopen_s(&g_consoleOut, "CONOUT$", "w", stdout);
     FILE* consoleErr = nullptr;
     freopen_s(&consoleErr, "CONOUT$", "w", stderr);
+    HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (console && console != INVALID_HANDLE_VALUE) {
+        CONSOLE_SCREEN_BUFFER_INFO info{};
+        if (GetConsoleScreenBufferInfo(console, &info)) {
+            g_consoleDefaultAttributes = info.wAttributes;
+        }
+    }
     g_consoleReady = true;
     for (int i = 0; i < g_pendingConsoleLineCount; ++i) {
         const int index = (g_pendingConsoleLineStart + i) % 96;
-        fprintf(g_consoleOut, "%s\n", g_pendingConsoleLines[index]);
+        WriteConsoleLogLine(ParseStampedLogLevel(g_pendingConsoleLines[index]), g_pendingConsoleLines[index]);
     }
     g_pendingConsoleLineCount = 0;
     g_pendingConsoleLineStart = 0;
@@ -5295,6 +5539,7 @@ DWORD WINAPI MainThread(void*) {
     InitModuleDir();
     InitGameInfo();
     LoadConfig();
+    LogGameInfo();
     InstallPatches();
     InstallDx11Hook();
     InstallDirectInputHook();

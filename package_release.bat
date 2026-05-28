@@ -20,7 +20,7 @@ copy /y "%ASI_PATH%" "%RELEASE_SCRIPTS%\AC4Tools.asi" >nul
 copy /y "%PROJECT_DIR%AC4Tools.ini" "%RELEASE_SCRIPTS%\AC4Tools.ini" >nul
 
 (
-echo AC4Tools v1.04
+echo AC4Tools v1.05
  echo.
  echo Made/tested for AC4BFSP.exe:
  echo Size: 45,056,040 bytes
@@ -34,6 +34,9 @@ echo AC4Tools v1.04
  echo.
  echo Open/close menu: configured in scripts\AC4Tools.ini under [Hotkeys] MenuOpen. Default is B.
  echo Logging is off by default. Set [Logging] EnableConsole or EnableFile to 1 in scripts\AC4Tools.ini to enable diagnostics.
+ echo Logs include INFO/WARN/ERROR levels. Console warnings are yellow and errors are red.
+ echo Startup diagnostics print the detected AC4BFSP.exe size, timestamp, and SHA256; SHA256 mismatches are warnings.
+ echo The DX11 overlay rebuilds its render target after swap-chain resize/reset events, which helps with ReShade and other overlays.
  echo.
  echo Current feature tabs:
  echo - Ship: Ship Godmode, Ally Godmode, No Cannon Cooldown.
