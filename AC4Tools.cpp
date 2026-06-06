@@ -4202,6 +4202,19 @@ bool InitImGui(IDXGISwapChain* swapChain) {
     ImGui_ImplWin32_Init(g_gameWindow);
     ImGui_ImplDX11_Init(g_device, g_context);
 
+    // Note for future overlay troubleshooting:
+    // We briefly tested a Present-time "re-hook" here that checked the current
+    // GWLP_WNDPROC every frame and reinstalled AC4Tools' WndProc if another
+    // module replaced it after startup. That experiment was added while
+    // investigating a report that mouse input was not being blocked while the
+    // UI was open, but the report turned out to be from an unsupported
+    // AC4BFSP.exe build with a different SHA256 and many rejected patches.
+    // Because the issue was not on the supported executable, we removed the
+    // runtime re-hook from the official build to avoid carrying extra window
+    // subclassing behavior in a sensitive code path without a confirmed need.
+    // If a supported-build overlay conflict ever appears, restore the helper
+    // that re-checks GWLP_WNDPROC and call it from HookPresent() after ImGui
+    // initialization.
     g_originalWndProc = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrA(g_gameWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WndProc)));
     g_imguiReady = true;
