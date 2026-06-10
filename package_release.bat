@@ -42,7 +42,7 @@ echo AC4Tools v1.05
  echo - Ship: Ship Godmode, Ally Godmode, No Cannon Cooldown.
  echo - Player: Player Godmode, Desynchronize yourself, Infinite Breath, Stealth Mode, No Reload, No Fall Damage, Allow Eagle Vision while sprinting, Kill civilians without desynchronization ^(also suppresses the warning^), Show collectibles, Lock Consumables ^(incl Ship Ammo^), One-time Inventory Refill, Freeze Mission Timer.
  echo - Noclip: configurable speed and boost speed.
- echo - Game: Time Scale, Toggle Hood, and Free Cam.
+ echo - Game: Time Scale, Toggle Hood, Toggle Crouch, and Free Cam.
  echo - Freedom Cry: add 100 Liberated Slaves or 100 Recruited Maroons to the Freedom Cry resistance counters.
  echo - Hotkeys: configurable menu, feature, and Free Cam control hotkeys.
  echo - System: logging/input/window-lock status plus patch diagnostics.
@@ -54,6 +54,10 @@ echo AC4Tools v1.05
  echo.
  echo Toggle Hood:
  echo - One-shot action in the Game tab that raises or lowers Edward's hood based on the current state.
+ echo - Hotkey is optional and unbound by default.
+ echo.
+ echo Toggle Crouch:
+ echo - One-shot action in the Game tab that toggles Edward's crouch state directly.
  echo - Hotkey is optional and unbound by default.
  echo.
  echo Free Cam:

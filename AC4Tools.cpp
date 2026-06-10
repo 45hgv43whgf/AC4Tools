@@ -48,6 +48,9 @@ constexpr std::uintptr_t kToggleHoodUpAddress = 0x0169F3C0;
 constexpr std::size_t kPlayerHoodStateOffset = 0x188;
 constexpr std::size_t kPlayerHoodControllerOffset = 0x10C;
 constexpr std::size_t kPlayerHoodBusyFlagOffset = 0x200;
+constexpr std::size_t kPlayerCrouchStateOffsetA = 0xDB8;
+constexpr std::size_t kPlayerCrouchStateOffsetB = 0xDC0;
+constexpr std::size_t kPlayerCrouchStateOffsetC = 0xDC8;
 
 constexpr std::uintptr_t kPatchHealthAddress = 0x01225C3F;
 constexpr std::uintptr_t kPatchHealthReturnAddress = 0x01225C47;
@@ -341,6 +344,7 @@ bool g_inventoryPointerPatchReady = false;
 bool g_noclipPatchReady = false;
 bool g_freeCamHotkeyReady = true;
 bool g_toggleHoodReady = true;
+bool g_toggleCrouchReady = true;
 constexpr int kMenuHotkeyCapture = -2;
 constexpr int kFreeCamControlCaptureBase = -100;
 int g_menuHotkey = 'B';
@@ -411,6 +415,7 @@ void ApplyEagleVisionSprintPatch();
 void ApplyKillCiviliansNoDesyncPatch();
 void DesynchronizeYourself();
 bool ToggleHood();
+bool ToggleCrouch();
 void __stdcall ShowCollectiblesVisit(std::uint8_t* mapRoot);
 
 struct ToggleAction {
@@ -474,6 +479,12 @@ void AfterToggleHoodTrigger() {
     }
 }
 
+void AfterToggleCrouchTrigger() {
+    if (!ToggleCrouch()) {
+        LogWarn("Toggle Crouch failed: player entity not ready.");
+    }
+}
+
 ToggleAction g_actions[] = {
     {"ShipGodmode", "Ship Godmode", &g_enabled, &g_shipPatchReady, 0, nullptr},
     {"NoCannonCooldown", "No Cannon Cooldown", &g_noCannonCooldown, &g_noCannonCooldownPatchReady, 0, &AfterNoCannonCooldownToggle},
@@ -492,6 +503,7 @@ ToggleAction g_actions[] = {
     {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, &AfterNoclipToggle},
     {"TimeScale", "Time Scale", &g_timeScaleEnabled, &g_timeScalePatchReady, 0, &AfterTimeScaleToggle},
     {"ToggleHood", "Toggle Hood", nullptr, &g_toggleHoodReady, 0, &AfterToggleHoodTrigger},
+    {"ToggleCrouch", "Toggle Crouch", nullptr, &g_toggleCrouchReady, 0, &AfterToggleCrouchTrigger},
     {"FreeCam", "Free Cam", &g_freeCamEnabled, &g_freeCamHotkeyReady, 0, &AfterFreeCamToggle},
 };
 
@@ -2575,6 +2587,19 @@ int GetPlayerHoodState() {
     return *reinterpret_cast<int*>(static_cast<std::uint8_t*>(entity) + kPlayerHoodStateOffset);
 }
 
+int GetPlayerCrouchState() {
+    void* entity = GetPlayerEntity();
+    if (!entity) {
+        return -1;
+    }
+
+    auto* entityBytes = static_cast<std::uint8_t*>(entity);
+    const int stateA = *reinterpret_cast<int*>(entityBytes + kPlayerCrouchStateOffsetA);
+    const int stateB = *reinterpret_cast<int*>(entityBytes + kPlayerCrouchStateOffsetB);
+    const int stateC = *reinterpret_cast<int*>(entityBytes + kPlayerCrouchStateOffsetC);
+    return (stateA > 0 || stateB > 0 || stateC > 0) ? 1 : 0;
+}
+
 bool ToggleHood() {
     void* entity = GetPlayerEntity();
     if (!entity) {
@@ -2612,6 +2637,25 @@ bool ToggleHood() {
     }
     busyEntityBytes[kPlayerHoodBusyFlagOffset] = 0;
     return updatedHoodState != hoodState;
+}
+
+bool ToggleCrouch() {
+    void* entity = GetPlayerEntity();
+    if (!entity) {
+        return false;
+    }
+
+    auto* entityBytes = static_cast<std::uint8_t*>(entity);
+    const int crouchState = GetPlayerCrouchState();
+    if (crouchState < 0) {
+        return false;
+    }
+
+    const int nextState = crouchState == 0 ? 1 : 0;
+    *reinterpret_cast<int*>(entityBytes + kPlayerCrouchStateOffsetA) = nextState;
+    *reinterpret_cast<int*>(entityBytes + kPlayerCrouchStateOffsetB) = nextState;
+    *reinterpret_cast<int*>(entityBytes + kPlayerCrouchStateOffsetC) = nextState;
+    return GetPlayerCrouchState() != crouchState;
 }
 
 bool IsGameNoclipActive() {
@@ -4913,6 +4957,35 @@ void DrawMenu() {
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Raises or lowers Edward's hood based on the current state.");
+            }
+
+            const int crouchState = GetPlayerCrouchState();
+            if (crouchState < 0) {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Toggle Crouch")) {
+                if (ToggleCrouch()) {
+                    const int updatedCrouchState = GetPlayerCrouchState();
+                    if (updatedCrouchState == 1) {
+                        Log("Toggle Crouch set crouch ON from ImGui.");
+                    } else if (updatedCrouchState == 0) {
+                        Log("Toggle Crouch set crouch OFF from ImGui.");
+                    } else {
+                        Log("Toggle Crouch triggered from ImGui.");
+                    }
+                } else {
+                    LogWarn("Toggle Crouch failed from ImGui: player entity not ready.");
+                }
+            }
+            if (crouchState < 0) {
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("Toggle Crouch unavailable: player entity not ready.");
+            } else {
+                ImGui::SameLine();
+                ImGui::TextDisabled("Current crouch: %s", crouchState == 1 ? "on" : "off");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Toggles Edward's crouch state by switching the live crouch flags.");
             }
             ImGui::Separator();
             bool freeCam = g_freeCamEnabled;
