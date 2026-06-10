@@ -40,6 +40,15 @@ constexpr const char* kSupportedGameTimestamp = "2023-11-14 14:41:36";
 constexpr const char* kSupportedGameSha256 =
     "732AAE5679D068EE58736C35D2627473EB6ED34B28A1AE3B11076D7AD3212ACD";
 
+constexpr std::uintptr_t kGetPlayerRootAddress = 0x0054D4D0;
+constexpr std::uintptr_t kGetActorFromRootAddress = 0x0070E810;
+constexpr std::uintptr_t kGetEntityFromActorAddress = 0x013905A0;
+constexpr std::uintptr_t kToggleHoodDownAddress = 0x0169F260;
+constexpr std::uintptr_t kToggleHoodUpAddress = 0x0169F3C0;
+constexpr std::size_t kPlayerHoodStateOffset = 0x188;
+constexpr std::size_t kPlayerHoodControllerOffset = 0x10C;
+constexpr std::size_t kPlayerHoodBusyFlagOffset = 0x200;
+
 constexpr std::uintptr_t kPatchHealthAddress = 0x01225C3F;
 constexpr std::uintptr_t kPatchHealthReturnAddress = 0x01225C47;
 constexpr std::uint8_t kOriginalHealthBytes[] = {
@@ -331,6 +340,7 @@ bool g_missionTimersPatchReady = false;
 bool g_inventoryPointerPatchReady = false;
 bool g_noclipPatchReady = false;
 bool g_freeCamHotkeyReady = true;
+bool g_toggleHoodReady = true;
 constexpr int kMenuHotkeyCapture = -2;
 constexpr int kFreeCamControlCaptureBase = -100;
 int g_menuHotkey = 'B';
@@ -390,6 +400,7 @@ enum class LogLevel {
     Warning,
     Error,
 };
+void LogWarn(const char* message);
 void UpdateTimeScaleInterval();
 void UpdateFreeCam();
 bool InstallLockConsumablesPatch();
@@ -399,6 +410,7 @@ void ApplyStealthModePatch();
 void ApplyEagleVisionSprintPatch();
 void ApplyKillCiviliansNoDesyncPatch();
 void DesynchronizeYourself();
+bool ToggleHood();
 void __stdcall ShowCollectiblesVisit(std::uint8_t* mapRoot);
 
 struct ToggleAction {
@@ -456,6 +468,12 @@ void AfterKillCiviliansNoDesyncToggle() {
     ApplyKillCiviliansNoDesyncPatch();
 }
 
+void AfterToggleHoodTrigger() {
+    if (!ToggleHood()) {
+        LogWarn("Toggle Hood failed: player entity not ready.");
+    }
+}
+
 ToggleAction g_actions[] = {
     {"ShipGodmode", "Ship Godmode", &g_enabled, &g_shipPatchReady, 0, nullptr},
     {"NoCannonCooldown", "No Cannon Cooldown", &g_noCannonCooldown, &g_noCannonCooldownPatchReady, 0, &AfterNoCannonCooldownToggle},
@@ -473,6 +491,7 @@ ToggleAction g_actions[] = {
     {"FreezeMissionTimer", "Freeze Mission Timer", &g_freezeMissionTimer, &g_missionTimersPatchReady, 0, nullptr},
     {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, &AfterNoclipToggle},
     {"TimeScale", "Time Scale", &g_timeScaleEnabled, &g_timeScalePatchReady, 0, &AfterTimeScaleToggle},
+    {"ToggleHood", "Toggle Hood", nullptr, &g_toggleHoodReady, 0, &AfterToggleHoodTrigger},
     {"FreeCam", "Free Cam", &g_freeCamEnabled, &g_freeCamHotkeyReady, 0, &AfterFreeCamToggle},
 };
 
@@ -2539,16 +2558,64 @@ void* GetPlayerActor() {
     using GetPlayerRootFn = void*(__cdecl*)();
     using GetActorFn = void*(__thiscall*)(void*);
 
-    void* root = reinterpret_cast<GetPlayerRootFn>(0x0054D4D0)();
+    void* root = reinterpret_cast<GetPlayerRootFn>(kGetPlayerRootAddress)();
     if (!root) {
         return nullptr;
     }
-    return reinterpret_cast<GetActorFn>(0x0070E810)(root);
+    return reinterpret_cast<GetActorFn>(kGetActorFromRootAddress)(root);
 }
 
 void* GetPlayerEntity() {
     using GetEntityFn = void*(__cdecl*)(void*);
-    return reinterpret_cast<GetEntityFn>(0x013905A0)(GetPlayerActor());
+    return reinterpret_cast<GetEntityFn>(kGetEntityFromActorAddress)(GetPlayerActor());
+}
+
+int GetPlayerHoodState() {
+    void* entity = GetPlayerEntity();
+    if (!entity) {
+        return -1;
+    }
+
+    return *reinterpret_cast<int*>(static_cast<std::uint8_t*>(entity) + kPlayerHoodStateOffset);
+}
+
+bool ToggleHood() {
+    void* entity = GetPlayerEntity();
+    if (!entity) {
+        return false;
+    }
+
+    auto* entityBytes = static_cast<std::uint8_t*>(entity);
+    const int hoodState = *reinterpret_cast<int*>(entityBytes + kPlayerHoodStateOffset);
+    void* busyEntity = GetPlayerEntity();
+    if (!busyEntity) {
+        busyEntity = entity;
+    }
+    auto* busyEntityBytes = static_cast<std::uint8_t*>(busyEntity);
+    busyEntityBytes[kPlayerHoodBusyFlagOffset] = 1;
+
+    const std::uintptr_t targetAddress =
+        hoodState == 1 ? kToggleHoodUpAddress : kToggleHoodDownAddress;
+
+    __asm {
+        mov ecx, entity
+        add ecx, kPlayerHoodControllerOffset
+        xor edx, edx
+        push 0
+        push 0
+        push 0
+        call targetAddress
+    }
+
+    void* refreshedEntity = GetPlayerEntity();
+    int updatedHoodState = hoodState;
+    if (refreshedEntity) {
+        busyEntityBytes = static_cast<std::uint8_t*>(refreshedEntity);
+        updatedHoodState = *reinterpret_cast<int*>(
+            static_cast<std::uint8_t*>(refreshedEntity) + kPlayerHoodStateOffset);
+    }
+    busyEntityBytes[kPlayerHoodBusyFlagOffset] = 0;
+    return updatedHoodState != hoodState;
 }
 
 bool IsGameNoclipActive() {
@@ -4821,6 +4888,35 @@ void DrawMenu() {
                 ImGui::Checkbox("Freeze Mission Timer", &g_freezeMissionTimer);
             } else {
                 ImGui::TextDisabled("Freeze Mission Timer unavailable: hooks were not installed.");
+            }
+
+            const int hoodState = GetPlayerHoodState();
+            if (hoodState < 0) {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Toggle Hood")) {
+                if (ToggleHood()) {
+                    const int updatedHoodState = GetPlayerHoodState();
+                    if (updatedHoodState == 0) {
+                        Log("Toggle Hood set hood UP from ImGui.");
+                    } else if (updatedHoodState == 1) {
+                        Log("Toggle Hood set hood DOWN from ImGui.");
+                    } else {
+                        Log("Toggle Hood triggered from ImGui.");
+                    }
+                } else {
+                    LogWarn("Toggle Hood failed from ImGui: player entity not ready.");
+                }
+            }
+            if (hoodState < 0) {
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("Toggle Hood unavailable: player entity not ready.");
+            } else {
+                ImGui::SameLine();
+                ImGui::TextDisabled("Current hood: %s", hoodState == 0 ? "up" : "down");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Raises or lowers Edward's hood based on the current state.");
             }
             ImGui::Separator();
             bool freeCam = g_freeCamEnabled;

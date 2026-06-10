@@ -81,6 +81,7 @@ Unlocks can irreversibly softlock your save if an unlocked item was supposed to 
 
 - Noclip with configurable speed and boost speed
 - Time Scale with configurable value
+- Toggle Hood: one-shot action that raises or lowers Edward's hood based on the current state. It can be assigned a hotkey and has no default binding.
 - Free Cam with separate movement, vertical movement, and mouse-look speed controls
 - Optional mouse lock to keep the Windows cursor inside the game window
 - Optional mouse input blocking while the AC4Tools UI is open
@@ -96,6 +97,8 @@ Unlocks can irreversibly softlock your save if an unlocked item was supposed to 
 ## Notes
 
 `Lock Consumables (incl Ship Ammo)` should be enabled after the save is fully loaded. It does not refill values upward; it prevents the shared consume/decrement function from lowering supported consumables while enabled.
+
+`Toggle Hood` is a one-shot action in the Game tab. It raises or lowers Edward's hood based on the current state. Its hotkey is optional and unbound by default.
 
 `Free Cam` installs its camera hooks only when enabled from the Game tab or its assigned hotkey. Use the mouse to aim. Default controls are `Num8`/`Num2` for forward/back, `Num4`/`Num6` to strafe, `Num7`/`Num9` to move up/down, hold `Shift` to speed up, and press `F10` to exit. Movement, boost, and exit keys can be changed in the Hotkeys tab under `Free Cam Control Hotkeys`. `Free Cam Look Speed` scales mouse-look sensitivity while Free Cam is enabled.
 
@@ -212,6 +215,7 @@ LockConsumables = 0
 FreezeMissionTimer = 0
 Noclip = 0
 TimeScale = 0
+ToggleHood = 0
 FreeCam = 0
 
 [FreeCamControls]
