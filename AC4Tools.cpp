@@ -32,8 +32,8 @@ extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wparam
 namespace {
 
 constexpr const char* kToolName = "AC4Tools";
-constexpr const char* kToolVersion = "v1.05";
-constexpr const char* kToolTitle = "AC4Tools v1.05";
+constexpr const char* kToolVersion = "v1.06";
+constexpr const char* kToolTitle = "AC4Tools v1.06";
 constexpr const char* kSupportedGameExe = "AC4BFSP.exe";
 constexpr const char* kSupportedGameSize = "45,056,040 bytes";
 constexpr const char* kSupportedGameTimestamp = "2023-11-14 14:41:36";
@@ -5689,7 +5689,7 @@ void InitConsole() {
     if (!AllocConsole()) {
         return;
     }
-    SetConsoleTitleA("AC4Tools v1.05 Log");
+    SetConsoleTitleA("AC4Tools v1.06 Log");
     freopen_s(&g_consoleOut, "CONOUT$", "w", stdout);
     FILE* consoleErr = nullptr;
     freopen_s(&consoleErr, "CONOUT$", "w", stderr);
