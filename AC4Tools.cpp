@@ -750,11 +750,7 @@ void LogMessage(LogLevel level, const char* message) {
     }
 
     char path[MAX_PATH]{};
-    GetModuleFileNameA(nullptr, path, MAX_PATH);
-    char* slash = strrchr(path, '\\');
-    if (slash) {
-        slash[1] = '\0';
-    }
+    strcpy_s(path, g_moduleDir);
     strcat_s(path, "AC4Tools.log");
 
     FILE* file = nullptr;

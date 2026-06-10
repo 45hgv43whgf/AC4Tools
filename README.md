@@ -229,7 +229,7 @@ Boost = 16
 Exit = 121
 ```
 
-`EnableConsole = 1` opens a console window. `EnableFile = 1` writes timestamped lines to `AC4Tools.log` next to `AC4BFSP.exe`. Both are off by default.
+`EnableConsole = 1` opens a console window. `EnableFile = 1` writes timestamped lines to `AC4Tools.log` in the `scripts` folder next to `AC4Tools.asi`. Both are off by default.
 
 Logs include `[INFO]`, `[WARN]`, and `[ERROR]` levels. When console logging is enabled, warnings are yellow and errors are red. Startup diagnostics print the detected `AC4BFSP.exe` size, timestamp, and SHA256; a SHA256 mismatch is a warning that the game executable may not be the fully supported build.
 
