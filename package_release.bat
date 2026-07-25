@@ -65,7 +65,7 @@ echo AC4Tools v1.06
  echo - Mouse aims; Num8/Num2 move forward/back, Num4/Num6 strafe, Num7/Num9 up/down.
  echo - Free Cam Speed, Vertical Speed, and Look Speed are separately configurable.
  echo - Hold Shift to speed up and press F10 to exit by default.
- echo - Movement, boost, and exit keys are configurable in the Hotkeys tab under Free Cam Control Hotkeys.
+ echo - Movement, boost, and exit keyboard/controller bindings are configurable in the Hotkeys tab under Free Cam Control Hotkeys.
  echo.
  echo One-time Inventory Refill:
  echo - Choose one resource/ammo type from the dropdown and click the dynamic preset Refill button, or open the custom refill popup and enter your own amount.

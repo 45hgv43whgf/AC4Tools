@@ -6,6 +6,7 @@
 #include <dinput.h>
 #include <dxgi.h>
 #include <wincrypt.h>
+#include <xinput.h>
 
 #include <cstdint>
 #include <cstddef>
@@ -25,6 +26,7 @@
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "xinput9_1_0.lib")
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -346,10 +348,39 @@ bool g_freeCamHotkeyReady = true;
 bool g_toggleHoodReady = true;
 bool g_toggleCrouchReady = true;
 constexpr int kMenuHotkeyCapture = -2;
+constexpr int kMenuGamepadHotkeyCapture = -3;
 constexpr int kFreeCamControlCaptureBase = -100;
+constexpr int kFreeCamControlGamepadCaptureBase = -200;
+constexpr int kActionGamepadCaptureBase = -300;
+constexpr int kGamepadButtonA = 0x1001;
+constexpr int kGamepadButtonB = 0x1002;
+constexpr int kGamepadButtonX = 0x1003;
+constexpr int kGamepadButtonY = 0x1004;
+constexpr int kGamepadButtonDpadUp = 0x1005;
+constexpr int kGamepadButtonDpadDown = 0x1006;
+constexpr int kGamepadButtonDpadLeft = 0x1007;
+constexpr int kGamepadButtonDpadRight = 0x1008;
+constexpr int kGamepadButtonLeftShoulder = 0x1009;
+constexpr int kGamepadButtonRightShoulder = 0x100A;
+constexpr int kGamepadButtonLeftThumb = 0x100B;
+constexpr int kGamepadButtonRightThumb = 0x100C;
+constexpr int kGamepadButtonBack = 0x100D;
+constexpr int kGamepadButtonStart = 0x100E;
+constexpr int kGamepadButtonLeftTrigger = 0x100F;
+constexpr int kGamepadButtonRightTrigger = 0x1010;
+constexpr int kGamepadButtonLeftStickUp = 0x1011;
+constexpr int kGamepadButtonLeftStickDown = 0x1012;
+constexpr int kGamepadButtonLeftStickLeft = 0x1013;
+constexpr int kGamepadButtonLeftStickRight = 0x1014;
+constexpr int kGamepadButtonRightStickUp = 0x1015;
+constexpr int kGamepadButtonRightStickDown = 0x1016;
+constexpr int kGamepadButtonRightStickLeft = 0x1017;
+constexpr int kGamepadButtonRightStickRight = 0x1018;
 int g_menuHotkey = 'B';
+int g_menuGamepadHotkey = 0;
 int g_hotkeyCaptureAction = -1;
 int g_suppressedHotkeyVk = 0;
+int g_suppressedHotkeyGamepadButton = 0;
 char g_moduleDir[MAX_PATH]{};
 char g_gameExePath[MAX_PATH]{};
 char g_gameExeName[64]{};
@@ -395,6 +426,12 @@ GetDeviceDataFn g_originalGetDeviceDataKeyboard = nullptr;
 GetAsyncKeyStateFn g_originalGetAsyncKeyState = nullptr;
 GetKeyStateFn g_originalGetKeyState = nullptr;
 GetKeyboardStateFn g_originalGetKeyboardState = nullptr;
+XINPUT_STATE g_gamepadStates[XUSER_MAX_COUNT]{};
+XINPUT_STATE g_previousGamepadStates[XUSER_MAX_COUNT]{};
+bool g_gamepadConnected[XUSER_MAX_COUNT]{};
+bool g_previousGamepadConnected[XUSER_MAX_COUNT]{};
+float g_pendingMouseWheel = 0.0f;
+float g_pendingMouseWheelH = 0.0f;
 
 void InitConsole();
 void __stdcall UpdateNoclipState();
@@ -417,6 +454,11 @@ void DesynchronizeYourself();
 bool ToggleHood();
 bool ToggleCrouch();
 void __stdcall ShowCollectiblesVisit(std::uint8_t* mapRoot);
+bool IsBindableGamepadButton(int button);
+bool IsGamepadButtonDown(int button);
+bool WasGamepadButtonJustPressed(int button);
+void ClearKeyboardHotkeyConflicts(int vk, int actionToSkip, int freeCamControlToSkip);
+void ClearGamepadHotkeyConflicts(int button, int actionToSkip, int freeCamControlToSkip);
 
 struct ToggleAction {
     const char* id;
@@ -424,6 +466,7 @@ struct ToggleAction {
     bool* value;
     bool* ready;
     int hotkey;
+    int gamepadHotkey;
     void (*afterToggle)();
 };
 
@@ -486,25 +529,25 @@ void AfterToggleCrouchTrigger() {
 }
 
 ToggleAction g_actions[] = {
-    {"ShipGodmode", "Ship Godmode", &g_enabled, &g_shipPatchReady, 0, nullptr},
-    {"NoCannonCooldown", "No Cannon Cooldown", &g_noCannonCooldown, &g_noCannonCooldownPatchReady, 0, &AfterNoCannonCooldownToggle},
-    {"AllyGodmode", "Ally Godmode", &g_allyGodmode, &g_allyGodmodePatchReady, 0, nullptr},
-    {"PlayerGodmode", "Player Godmode", &g_playerGodmode, &g_playerHealthPatchReady, 0, nullptr},
-    {"DesynchronizeYourself", "Desynchronize yourself", nullptr, &g_playerHealthPatchReady, 0, &DesynchronizeYourself},
-    {"InfiniteBreath", "Infinite Breath", &g_infiniteBreath, &g_infiniteBreathPatchReady, 0, nullptr},
-    {"StealthMode", "Stealth Mode", &g_stealthMode, &g_stealthModePatchReady, 0, &AfterStealthModeToggle},
-    {"NoReload", "No Reload", &g_noReload, &g_noReloadPatchReady, 0, nullptr},
-    {"NoFallDamage", "No Fall Damage", &g_noFallDamage, &g_noFallDamagePatchReady, 0, nullptr},
-    {"EagleVisionSprint", "Allow Eagle Vision while sprinting", &g_eagleVisionSprint, &g_eagleVisionSprintPatchReady, 0, &AfterEagleVisionSprintToggle},
-    {"KillCiviliansNoDesync", "Kill civilians without desynchronization", &g_killCiviliansNoDesync, &g_killCiviliansNoDesyncPatchReady, 0, &AfterKillCiviliansNoDesyncToggle},
-    {"ShowCollectibles", "Show collectibles", &g_showCollectibles, &g_showCollectiblesPatchReady, 0, nullptr},
-    {"LockConsumables", "Lock Consumables", &g_lockConsumables, &g_lockConsumablesHotkeyReady, 0, &AfterLockConsumablesToggle},
-    {"FreezeMissionTimer", "Freeze Mission Timer", &g_freezeMissionTimer, &g_missionTimersPatchReady, 0, nullptr},
-    {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, &AfterNoclipToggle},
-    {"TimeScale", "Time Scale", &g_timeScaleEnabled, &g_timeScalePatchReady, 0, &AfterTimeScaleToggle},
-    {"ToggleHood", "Toggle Hood", nullptr, &g_toggleHoodReady, 0, &AfterToggleHoodTrigger},
-    {"ToggleCrouch", "Toggle Crouch", nullptr, &g_toggleCrouchReady, 0, &AfterToggleCrouchTrigger},
-    {"FreeCam", "Free Cam", &g_freeCamEnabled, &g_freeCamHotkeyReady, 0, &AfterFreeCamToggle},
+    {"ShipGodmode", "Ship Godmode", &g_enabled, &g_shipPatchReady, 0, 0, nullptr},
+    {"NoCannonCooldown", "No Cannon Cooldown", &g_noCannonCooldown, &g_noCannonCooldownPatchReady, 0, 0, &AfterNoCannonCooldownToggle},
+    {"AllyGodmode", "Ally Godmode", &g_allyGodmode, &g_allyGodmodePatchReady, 0, 0, nullptr},
+    {"PlayerGodmode", "Player Godmode", &g_playerGodmode, &g_playerHealthPatchReady, 0, 0, nullptr},
+    {"DesynchronizeYourself", "Desynchronize yourself", nullptr, &g_playerHealthPatchReady, 0, 0, &DesynchronizeYourself},
+    {"InfiniteBreath", "Infinite Breath", &g_infiniteBreath, &g_infiniteBreathPatchReady, 0, 0, nullptr},
+    {"StealthMode", "Stealth Mode", &g_stealthMode, &g_stealthModePatchReady, 0, 0, &AfterStealthModeToggle},
+    {"NoReload", "No Reload", &g_noReload, &g_noReloadPatchReady, 0, 0, nullptr},
+    {"NoFallDamage", "No Fall Damage", &g_noFallDamage, &g_noFallDamagePatchReady, 0, 0, nullptr},
+    {"EagleVisionSprint", "Allow Eagle Vision while sprinting", &g_eagleVisionSprint, &g_eagleVisionSprintPatchReady, 0, 0, &AfterEagleVisionSprintToggle},
+    {"KillCiviliansNoDesync", "Kill civilians without desynchronization", &g_killCiviliansNoDesync, &g_killCiviliansNoDesyncPatchReady, 0, 0, &AfterKillCiviliansNoDesyncToggle},
+    {"ShowCollectibles", "Show collectibles", &g_showCollectibles, &g_showCollectiblesPatchReady, 0, 0, nullptr},
+    {"LockConsumables", "Lock Consumables", &g_lockConsumables, &g_lockConsumablesHotkeyReady, 0, 0, &AfterLockConsumablesToggle},
+    {"FreezeMissionTimer", "Freeze Mission Timer", &g_freezeMissionTimer, &g_missionTimersPatchReady, 0, 0, nullptr},
+    {"Noclip", "Noclip", &g_noclipEnabled, &g_noclipPatchReady, 0, 0, &AfterNoclipToggle},
+    {"TimeScale", "Time Scale", &g_timeScaleEnabled, &g_timeScalePatchReady, 0, 0, &AfterTimeScaleToggle},
+    {"ToggleHood", "Toggle Hood", nullptr, &g_toggleHoodReady, 0, 0, &AfterToggleHoodTrigger},
+    {"ToggleCrouch", "Toggle Crouch", nullptr, &g_toggleCrouchReady, 0, 0, &AfterToggleCrouchTrigger},
+    {"FreeCam", "Free Cam", &g_freeCamEnabled, &g_freeCamHotkeyReady, 0, 0, &AfterFreeCamToggle},
 };
 
 constexpr int kActionCount = sizeof(g_actions) / sizeof(g_actions[0]);
@@ -513,18 +556,20 @@ struct FreeCamControlBinding {
     const char* id;
     const char* label;
     int key;
+    int gamepadButton;
     int defaultKey;
+    int defaultGamepadButton;
 };
 
 FreeCamControlBinding g_freeCamControls[] = {
-    {"MoveForward", "Move Forward", VK_NUMPAD8, VK_NUMPAD8},
-    {"MoveBackward", "Move Backward", VK_NUMPAD2, VK_NUMPAD2},
-    {"StrafeLeft", "Strafe Left", VK_NUMPAD4, VK_NUMPAD4},
-    {"StrafeRight", "Strafe Right", VK_NUMPAD6, VK_NUMPAD6},
-    {"MoveUp", "Move Up", VK_NUMPAD7, VK_NUMPAD7},
-    {"MoveDown", "Move Down", VK_NUMPAD9, VK_NUMPAD9},
-    {"Boost", "Boost", VK_SHIFT, VK_SHIFT},
-    {"Exit", "Exit Free Cam", VK_F10, VK_F10},
+    {"MoveForward", "Move Forward", VK_NUMPAD8, kGamepadButtonDpadUp, VK_NUMPAD8, kGamepadButtonDpadUp},
+    {"MoveBackward", "Move Backward", VK_NUMPAD2, kGamepadButtonDpadDown, VK_NUMPAD2, kGamepadButtonDpadDown},
+    {"StrafeLeft", "Strafe Left", VK_NUMPAD4, kGamepadButtonDpadLeft, VK_NUMPAD4, kGamepadButtonDpadLeft},
+    {"StrafeRight", "Strafe Right", VK_NUMPAD6, kGamepadButtonDpadRight, VK_NUMPAD6, kGamepadButtonDpadRight},
+    {"MoveUp", "Move Up", VK_NUMPAD7, kGamepadButtonLeftShoulder, VK_NUMPAD7, kGamepadButtonLeftShoulder},
+    {"MoveDown", "Move Down", VK_NUMPAD9, kGamepadButtonRightShoulder, VK_NUMPAD9, kGamepadButtonRightShoulder},
+    {"Boost", "Boost", VK_SHIFT, kGamepadButtonLeftTrigger, VK_SHIFT, kGamepadButtonLeftTrigger},
+    {"Exit", "Exit Free Cam", VK_F10, kGamepadButtonB, VK_F10, kGamepadButtonB},
 };
 
 constexpr int kFreeCamControlCount = sizeof(g_freeCamControls) / sizeof(g_freeCamControls[0]);
@@ -890,6 +935,64 @@ const char* HotkeyName(int vk) {
     }
 }
 
+const int kBindableGamepadButtons[] = {
+    kGamepadButtonA,
+    kGamepadButtonB,
+    kGamepadButtonX,
+    kGamepadButtonY,
+    kGamepadButtonDpadUp,
+    kGamepadButtonDpadDown,
+    kGamepadButtonDpadLeft,
+    kGamepadButtonDpadRight,
+    kGamepadButtonLeftShoulder,
+    kGamepadButtonRightShoulder,
+    kGamepadButtonLeftThumb,
+    kGamepadButtonRightThumb,
+    kGamepadButtonBack,
+    kGamepadButtonStart,
+    kGamepadButtonLeftTrigger,
+    kGamepadButtonRightTrigger,
+    kGamepadButtonLeftStickUp,
+    kGamepadButtonLeftStickDown,
+    kGamepadButtonLeftStickLeft,
+    kGamepadButtonLeftStickRight,
+    kGamepadButtonRightStickUp,
+    kGamepadButtonRightStickDown,
+    kGamepadButtonRightStickLeft,
+    kGamepadButtonRightStickRight,
+};
+
+const char* GamepadButtonName(int button) {
+    switch (button) {
+        case 0: return "None";
+        case kGamepadButtonA: return "Pad A";
+        case kGamepadButtonB: return "Pad B";
+        case kGamepadButtonX: return "Pad X";
+        case kGamepadButtonY: return "Pad Y";
+        case kGamepadButtonDpadUp: return "Pad D-Up";
+        case kGamepadButtonDpadDown: return "Pad D-Down";
+        case kGamepadButtonDpadLeft: return "Pad D-Left";
+        case kGamepadButtonDpadRight: return "Pad D-Right";
+        case kGamepadButtonLeftShoulder: return "Pad LB";
+        case kGamepadButtonRightShoulder: return "Pad RB";
+        case kGamepadButtonLeftThumb: return "Pad L3";
+        case kGamepadButtonRightThumb: return "Pad R3";
+        case kGamepadButtonBack: return "Pad Back";
+        case kGamepadButtonStart: return "Pad Start";
+        case kGamepadButtonLeftTrigger: return "Pad LT";
+        case kGamepadButtonRightTrigger: return "Pad RT";
+        case kGamepadButtonLeftStickUp: return "Pad LS Up";
+        case kGamepadButtonLeftStickDown: return "Pad LS Down";
+        case kGamepadButtonLeftStickLeft: return "Pad LS Left";
+        case kGamepadButtonLeftStickRight: return "Pad LS Right";
+        case kGamepadButtonRightStickUp: return "Pad RS Up";
+        case kGamepadButtonRightStickDown: return "Pad RS Down";
+        case kGamepadButtonRightStickLeft: return "Pad RS Left";
+        case kGamepadButtonRightStickRight: return "Pad RS Right";
+        default: return "Pad ?";
+    }
+}
+
 bool IsBindableHotkey(int vk) {
     if (vk <= 0 || vk >= 256) {
         return false;
@@ -932,13 +1035,23 @@ void SaveConfig() {
     WritePrivateProfileStringA("Noclip", "BoostSpeed", value, path);
     sprintf_s(value, "%d", g_menuHotkey);
     WritePrivateProfileStringA("Hotkeys", "MenuOpen", value, path);
+    sprintf_s(value, "%d", g_menuGamepadHotkey);
+    WritePrivateProfileStringA("Hotkeys", "MenuOpenGamepad", value, path);
     for (int i = 0; i < kActionCount; ++i) {
         sprintf_s(value, "%d", g_actions[i].hotkey);
         WritePrivateProfileStringA("Hotkeys", g_actions[i].id, value, path);
+        sprintf_s(value, "%d", g_actions[i].gamepadHotkey);
+        char gamepadKey[64]{};
+        sprintf_s(gamepadKey, "%sGamepad", g_actions[i].id);
+        WritePrivateProfileStringA("Hotkeys", gamepadKey, value, path);
     }
     for (int i = 0; i < kFreeCamControlCount; ++i) {
         sprintf_s(value, "%d", g_freeCamControls[i].key);
         WritePrivateProfileStringA("FreeCamControls", g_freeCamControls[i].id, value, path);
+        sprintf_s(value, "%d", g_freeCamControls[i].gamepadButton);
+        char gamepadKey[64]{};
+        sprintf_s(gamepadKey, "%sGamepad", g_freeCamControls[i].id);
+        WritePrivateProfileStringA("FreeCamControls", gamepadKey, value, path);
     }
 }
 
@@ -2323,11 +2436,20 @@ void LoadConfig() {
     GetPrivateProfileStringA("Hotkeys", "MenuOpen", "66", keyValue, sizeof(keyValue), ownPath);
     int vk = atoi(keyValue);
     g_menuHotkey = IsBindableHotkey(vk) ? vk : 'B';
+    GetPrivateProfileStringA("Hotkeys", "MenuOpenGamepad", "0", keyValue, sizeof(keyValue), ownPath);
+    int button = atoi(keyValue);
+    g_menuGamepadHotkey = IsBindableGamepadButton(button) ? button : 0;
 
     for (int i = 0; i < kActionCount; ++i) {
         GetPrivateProfileStringA("Hotkeys", g_actions[i].id, "0", keyValue, sizeof(keyValue), ownPath);
         vk = atoi(keyValue);
         g_actions[i].hotkey = IsBindableHotkey(vk) && vk != g_menuHotkey ? vk : 0;
+        char gamepadKey[64]{};
+        sprintf_s(gamepadKey, "%sGamepad", g_actions[i].id);
+        GetPrivateProfileStringA("Hotkeys", gamepadKey, "0", keyValue, sizeof(keyValue), ownPath);
+        button = atoi(keyValue);
+        g_actions[i].gamepadHotkey =
+            IsBindableGamepadButton(button) && button != g_menuGamepadHotkey ? button : 0;
     }
     for (int i = 0; i < kFreeCamControlCount; ++i) {
         char defaultValue[16]{};
@@ -2335,6 +2457,13 @@ void LoadConfig() {
         GetPrivateProfileStringA("FreeCamControls", g_freeCamControls[i].id, defaultValue, keyValue, sizeof(keyValue), ownPath);
         vk = atoi(keyValue);
         g_freeCamControls[i].key = IsBindableHotkey(vk) ? vk : g_freeCamControls[i].defaultKey;
+        sprintf_s(defaultValue, "%d", g_freeCamControls[i].defaultGamepadButton);
+        char gamepadKey[64]{};
+        sprintf_s(gamepadKey, "%sGamepad", g_freeCamControls[i].id);
+        GetPrivateProfileStringA("FreeCamControls", gamepadKey, defaultValue, keyValue, sizeof(keyValue), ownPath);
+        button = atoi(keyValue);
+        g_freeCamControls[i].gamepadButton =
+            IsBindableGamepadButton(button) ? button : g_freeCamControls[i].defaultGamepadButton;
     }
 }
 
@@ -2421,7 +2550,8 @@ bool IsFreeCamControlDown(int controlIndex) {
     if (controlIndex < 0 || controlIndex >= kFreeCamControlCount) {
         return false;
     }
-    return IsPhysicalKeyDown(g_freeCamControls[controlIndex].key);
+    return IsPhysicalKeyDown(g_freeCamControls[controlIndex].key) ||
+           IsGamepadButtonDown(g_freeCamControls[controlIndex].gamepadButton);
 }
 
 LONG ScaleMouseDelta(LONG value) {
@@ -2709,16 +2839,7 @@ void AssignMenuHotkey(int vk) {
         return;
     }
     if (vk != 0) {
-        for (int i = 0; i < kActionCount; ++i) {
-            if (g_actions[i].hotkey == vk) {
-                g_actions[i].hotkey = 0;
-            }
-        }
-        for (int i = 0; i < kFreeCamControlCount; ++i) {
-            if (g_freeCamControls[i].key == vk) {
-                g_freeCamControls[i].key = 0;
-            }
-        }
+        ClearKeyboardHotkeyConflicts(vk, -2, -2);
     }
     g_menuHotkey = vk;
     g_suppressedHotkeyVk = vk;
@@ -2726,8 +2847,29 @@ void AssignMenuHotkey(int vk) {
     Logf("Hotkey for Open/Close Menu set to %s.", HotkeyName(vk));
 }
 
+void AssignMenuGamepadHotkey(int button) {
+    if (button != 0 && !IsBindableGamepadButton(button)) {
+        return;
+    }
+    if (button != 0) {
+        ClearGamepadHotkeyConflicts(button, -2, -2);
+    }
+    g_menuGamepadHotkey = button;
+    g_suppressedHotkeyGamepadButton = button;
+    SaveConfig();
+    Logf("Gamepad hotkey for Open/Close Menu set to %s.", GamepadButtonName(button));
+}
+
 int FreeCamControlCaptureId(int controlIndex) {
     return kFreeCamControlCaptureBase - controlIndex;
+}
+
+int FreeCamControlGamepadCaptureId(int controlIndex) {
+    return kFreeCamControlGamepadCaptureBase - controlIndex;
+}
+
+int ActionGamepadCaptureId(int actionIndex) {
+    return kActionGamepadCaptureBase - actionIndex;
 }
 
 bool GetFreeCamControlCaptureIndex(int captureId, int& controlIndex) {
@@ -2739,6 +2881,93 @@ bool GetFreeCamControlCaptureIndex(int captureId, int& controlIndex) {
     return controlIndex >= 0 && controlIndex < kFreeCamControlCount;
 }
 
+bool GetFreeCamControlGamepadCaptureIndex(int captureId, int& controlIndex) {
+    if (captureId > kFreeCamControlGamepadCaptureBase ||
+        captureId <= kFreeCamControlGamepadCaptureBase - kFreeCamControlCount) {
+        return false;
+    }
+    controlIndex = kFreeCamControlGamepadCaptureBase - captureId;
+    return controlIndex >= 0 && controlIndex < kFreeCamControlCount;
+}
+
+bool GetActionGamepadCaptureIndex(int captureId, int& actionIndex) {
+    if (captureId > kActionGamepadCaptureBase ||
+        captureId <= kActionGamepadCaptureBase - kActionCount) {
+        return false;
+    }
+    actionIndex = kActionGamepadCaptureBase - captureId;
+    return actionIndex >= 0 && actionIndex < kActionCount;
+}
+
+void ClearKeyboardHotkeyConflicts(int vk, int actionToSkip = -1, int freeCamControlToSkip = -1) {
+    if (vk == 0) {
+        return;
+    }
+    if (g_menuHotkey == vk && actionToSkip != -2 && freeCamControlToSkip != -2) {
+        g_menuHotkey = 0;
+    }
+    for (int i = 0; i < kActionCount; ++i) {
+        if (i != actionToSkip && g_actions[i].hotkey == vk) {
+            g_actions[i].hotkey = 0;
+        }
+    }
+    for (int i = 0; i < kFreeCamControlCount; ++i) {
+        if (i != freeCamControlToSkip && g_freeCamControls[i].key == vk) {
+            g_freeCamControls[i].key = 0;
+        }
+    }
+}
+
+void AccumulateMouseWheelDelta(LONG delta) {
+    if (delta == 0) {
+        return;
+    }
+    g_pendingMouseWheel += static_cast<float>(delta) / static_cast<float>(WHEEL_DELTA);
+}
+
+void AccumulateMouseWheelDelta(LPVOID data, DWORD dataSize) {
+    if (!data || dataSize <= 0) {
+        return;
+    }
+    if (dataSize >= sizeof(DIMOUSESTATE2)) {
+        auto* state = static_cast<DIMOUSESTATE2*>(data);
+        AccumulateMouseWheelDelta(state->lZ);
+    } else if (dataSize >= sizeof(DIMOUSESTATE)) {
+        auto* state = static_cast<DIMOUSESTATE*>(data);
+        AccumulateMouseWheelDelta(state->lZ);
+    }
+}
+
+void AccumulateMouseWheelDelta(LPDIDEVICEOBJECTDATA objectData, DWORD count) {
+    if (!objectData) {
+        return;
+    }
+    for (DWORD i = 0; i < count; ++i) {
+        if (objectData[i].dwOfs == DIMOFS_Z) {
+            AccumulateMouseWheelDelta(static_cast<LONG>(objectData[i].dwData));
+        }
+    }
+}
+
+void ClearGamepadHotkeyConflicts(int button, int actionToSkip = -1, int freeCamControlToSkip = -1) {
+    if (button == 0) {
+        return;
+    }
+    if (g_menuGamepadHotkey == button && actionToSkip != -2 && freeCamControlToSkip != -2) {
+        g_menuGamepadHotkey = 0;
+    }
+    for (int i = 0; i < kActionCount; ++i) {
+        if (i != actionToSkip && g_actions[i].gamepadHotkey == button) {
+            g_actions[i].gamepadHotkey = 0;
+        }
+    }
+    for (int i = 0; i < kFreeCamControlCount; ++i) {
+        if (i != freeCamControlToSkip && g_freeCamControls[i].gamepadButton == button) {
+            g_freeCamControls[i].gamepadButton = 0;
+        }
+    }
+}
+
 void AssignHotkey(int actionIndex, int vk) {
     if (actionIndex < 0 || actionIndex >= kActionCount) {
         return;
@@ -2747,24 +2976,28 @@ void AssignHotkey(int actionIndex, int vk) {
         return;
     }
     if (vk != 0) {
-        if (g_menuHotkey == vk) {
-            g_menuHotkey = 0;
-        }
-        for (int i = 0; i < kActionCount; ++i) {
-            if (i != actionIndex && g_actions[i].hotkey == vk) {
-                g_actions[i].hotkey = 0;
-            }
-        }
-        for (int i = 0; i < kFreeCamControlCount; ++i) {
-            if (g_freeCamControls[i].key == vk) {
-                g_freeCamControls[i].key = 0;
-            }
-        }
+        ClearKeyboardHotkeyConflicts(vk, actionIndex, -1);
     }
     g_actions[actionIndex].hotkey = vk;
     g_suppressedHotkeyVk = vk;
     SaveConfig();
     Logf("Hotkey for %s set to %s.", g_actions[actionIndex].label, HotkeyName(vk));
+}
+
+void AssignGamepadHotkey(int actionIndex, int button) {
+    if (actionIndex < 0 || actionIndex >= kActionCount) {
+        return;
+    }
+    if (button != 0 && !IsBindableGamepadButton(button)) {
+        return;
+    }
+    if (button != 0) {
+        ClearGamepadHotkeyConflicts(button, actionIndex, -1);
+    }
+    g_actions[actionIndex].gamepadHotkey = button;
+    g_suppressedHotkeyGamepadButton = button;
+    SaveConfig();
+    Logf("Gamepad hotkey for %s set to %s.", g_actions[actionIndex].label, GamepadButtonName(button));
 }
 
 void AssignFreeCamControlHotkey(int controlIndex, int vk) {
@@ -2775,24 +3008,28 @@ void AssignFreeCamControlHotkey(int controlIndex, int vk) {
         return;
     }
     if (vk != 0) {
-        if (g_menuHotkey == vk) {
-            g_menuHotkey = 0;
-        }
-        for (int i = 0; i < kActionCount; ++i) {
-            if (g_actions[i].hotkey == vk) {
-                g_actions[i].hotkey = 0;
-            }
-        }
-        for (int i = 0; i < kFreeCamControlCount; ++i) {
-            if (i != controlIndex && g_freeCamControls[i].key == vk) {
-                g_freeCamControls[i].key = 0;
-            }
-        }
+        ClearKeyboardHotkeyConflicts(vk, -1, controlIndex);
     }
     g_freeCamControls[controlIndex].key = vk;
     g_suppressedHotkeyVk = vk;
     SaveConfig();
     Logf("Free Cam control %s set to %s.", g_freeCamControls[controlIndex].label, HotkeyName(vk));
+}
+
+void AssignFreeCamControlGamepadHotkey(int controlIndex, int button) {
+    if (controlIndex < 0 || controlIndex >= kFreeCamControlCount) {
+        return;
+    }
+    if (button != 0 && !IsBindableGamepadButton(button)) {
+        return;
+    }
+    if (button != 0) {
+        ClearGamepadHotkeyConflicts(button, -1, controlIndex);
+    }
+    g_freeCamControls[controlIndex].gamepadButton = button;
+    g_suppressedHotkeyGamepadButton = button;
+    SaveConfig();
+    Logf("Free Cam control %s set to %s.", g_freeCamControls[controlIndex].label, GamepadButtonName(button));
 }
 
 void ToggleActionFromHotkey(int actionIndex) {
@@ -2818,6 +3055,31 @@ void ToggleActionFromHotkey(int actionIndex) {
          action.label,
          *action.value ? "ON" : "OFF",
          HotkeyName(action.hotkey));
+}
+
+void TriggerActionFromGamepadHotkey(int actionIndex) {
+    if (actionIndex < 0 || actionIndex >= kActionCount) {
+        return;
+    }
+    ToggleAction& action = g_actions[actionIndex];
+    if (!action.ready || !*action.ready) {
+        return;
+    }
+    if (!action.value) {
+        if (action.afterToggle) {
+            action.afterToggle();
+            Logf("%s triggered from gamepad hotkey %s.", action.label, GamepadButtonName(action.gamepadHotkey));
+        }
+        return;
+    }
+    *action.value = !*action.value;
+    if (action.afterToggle) {
+        action.afterToggle();
+    }
+    Logf("%s toggled %s from gamepad hotkey %s.",
+         action.label,
+         *action.value ? "ON" : "OFF",
+         GamepadButtonName(action.gamepadHotkey));
 }
 
 void ProcessHotkeys() {
@@ -2847,6 +3109,52 @@ void ProcessHotkeys() {
             }
         }
         wasDown[vk] = down;
+    }
+
+    for (int i = 0; i < kActionCount; ++i) {
+        const int button = g_actions[i].gamepadHotkey;
+        if (button == 0) {
+            continue;
+        }
+        if (g_suppressedHotkeyGamepadButton == button) {
+            continue;
+        }
+        if (WasGamepadButtonJustPressed(button)) {
+            TriggerActionFromGamepadHotkey(i);
+        }
+    }
+}
+
+void ProcessGamepadCapture() {
+    if (!g_menuOpen || g_hotkeyCaptureAction == -1) {
+        return;
+    }
+
+    for (int i = 0; i < static_cast<int>(sizeof(kBindableGamepadButtons) / sizeof(kBindableGamepadButtons[0])); ++i) {
+        const int button = kBindableGamepadButtons[i];
+        if (!WasGamepadButtonJustPressed(button)) {
+            continue;
+        }
+
+        int freeCamControlIndex = -1;
+        int actionIndex = -1;
+        int freeCamControlGamepadIndex = -1;
+        if (g_hotkeyCaptureAction == kMenuGamepadHotkeyCapture) {
+            AssignMenuGamepadHotkey(button);
+        } else if (GetActionGamepadCaptureIndex(g_hotkeyCaptureAction, actionIndex)) {
+            AssignGamepadHotkey(actionIndex, button);
+        } else if (GetFreeCamControlGamepadCaptureIndex(g_hotkeyCaptureAction, freeCamControlGamepadIndex)) {
+            AssignFreeCamControlGamepadHotkey(freeCamControlGamepadIndex, button);
+        } else if (g_hotkeyCaptureAction == kMenuHotkeyCapture ||
+                   GetFreeCamControlCaptureIndex(g_hotkeyCaptureAction, freeCamControlIndex) ||
+                   (g_hotkeyCaptureAction >= 0 && g_hotkeyCaptureAction < kActionCount)) {
+            return;
+        } else {
+            return;
+        }
+
+        g_hotkeyCaptureAction = -1;
+        return;
     }
 }
 
@@ -4221,6 +4529,83 @@ bool CreateRenderTarget(IDXGISwapChain* swapChain) {
     return true;
 }
 
+bool IsBindableGamepadButton(int button) {
+    for (int i = 0; i < static_cast<int>(sizeof(kBindableGamepadButtons) / sizeof(kBindableGamepadButtons[0])); ++i) {
+        if (kBindableGamepadButtons[i] == button) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IsGamepadButtonDownInState(const XINPUT_STATE& state, int button) {
+    switch (button) {
+        case kGamepadButtonA: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_A) != 0;
+        case kGamepadButtonB: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0;
+        case kGamepadButtonX: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_X) != 0;
+        case kGamepadButtonY: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_Y) != 0;
+        case kGamepadButtonDpadUp: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
+        case kGamepadButtonDpadDown: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+        case kGamepadButtonDpadLeft: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+        case kGamepadButtonDpadRight: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
+        case kGamepadButtonLeftShoulder: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+        case kGamepadButtonRightShoulder: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+        case kGamepadButtonLeftThumb: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) != 0;
+        case kGamepadButtonRightThumb: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
+        case kGamepadButtonBack: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK) != 0;
+        case kGamepadButtonStart: return (state.Gamepad.wButtons & XINPUT_GAMEPAD_START) != 0;
+        case kGamepadButtonLeftTrigger: return state.Gamepad.bLeftTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+        case kGamepadButtonRightTrigger: return state.Gamepad.bRightTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+        case kGamepadButtonLeftStickUp: return state.Gamepad.sThumbLY >= XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+        case kGamepadButtonLeftStickDown: return state.Gamepad.sThumbLY <= -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+        case kGamepadButtonLeftStickLeft: return state.Gamepad.sThumbLX <= -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+        case kGamepadButtonLeftStickRight: return state.Gamepad.sThumbLX >= XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+        case kGamepadButtonRightStickUp: return state.Gamepad.sThumbRY >= XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+        case kGamepadButtonRightStickDown: return state.Gamepad.sThumbRY <= -XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+        case kGamepadButtonRightStickLeft: return state.Gamepad.sThumbRX <= -XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+        case kGamepadButtonRightStickRight: return state.Gamepad.sThumbRX >= XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+        default: return false;
+    }
+}
+
+void UpdateGamepadStates() {
+    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+        g_previousGamepadStates[i] = g_gamepadStates[i];
+        g_previousGamepadConnected[i] = g_gamepadConnected[i];
+        ZeroMemory(&g_gamepadStates[i], sizeof(g_gamepadStates[i]));
+        g_gamepadConnected[i] = XInputGetState(i, &g_gamepadStates[i]) == ERROR_SUCCESS;
+        if (!g_gamepadConnected[i]) {
+            ZeroMemory(&g_gamepadStates[i], sizeof(g_gamepadStates[i]));
+        }
+    }
+}
+
+bool IsGamepadButtonDown(int button) {
+    if (!IsBindableGamepadButton(button)) {
+        return false;
+    }
+    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+        if (g_gamepadConnected[i] && IsGamepadButtonDownInState(g_gamepadStates[i], button)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WasGamepadButtonJustPressed(int button) {
+    if (!IsBindableGamepadButton(button)) {
+        return false;
+    }
+    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+        const bool downNow = g_gamepadConnected[i] && IsGamepadButtonDownInState(g_gamepadStates[i], button);
+        const bool downBefore = g_previousGamepadConnected[i] && IsGamepadButtonDownInState(g_previousGamepadStates[i], button);
+        if (downNow && !downBefore) {
+            return true;
+        }
+    }
+    return false;
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (msg == WM_ACTIVATEAPP || msg == WM_KILLFOCUS || msg == WM_CANCELMODE) {
         if (wparam == FALSE || msg != WM_ACTIVATEAPP) {
@@ -4235,16 +4620,28 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)) {
             const int vk = static_cast<int>(wparam);
             int freeCamControlIndex = -1;
+            int gamepadActionIndex = -1;
+            int freeCamGamepadControlIndex = -1;
             const bool isFreeCamControlCapture =
                 GetFreeCamControlCaptureIndex(g_hotkeyCaptureAction, freeCamControlIndex);
+            const bool isActionGamepadCapture =
+                GetActionGamepadCaptureIndex(g_hotkeyCaptureAction, gamepadActionIndex);
+            const bool isFreeCamControlGamepadCapture =
+                GetFreeCamControlGamepadCaptureIndex(g_hotkeyCaptureAction, freeCamGamepadControlIndex);
             if (vk == VK_ESCAPE) {
                 g_hotkeyCaptureAction = -1;
                 Log("Hotkey capture cancelled.");
             } else if (vk == VK_BACK || vk == VK_DELETE) {
                 if (g_hotkeyCaptureAction == kMenuHotkeyCapture) {
                     AssignMenuHotkey(0);
+                } else if (g_hotkeyCaptureAction == kMenuGamepadHotkeyCapture) {
+                    AssignMenuGamepadHotkey(0);
                 } else if (isFreeCamControlCapture) {
                     AssignFreeCamControlHotkey(freeCamControlIndex, 0);
+                } else if (isFreeCamControlGamepadCapture) {
+                    AssignFreeCamControlGamepadHotkey(freeCamGamepadControlIndex, 0);
+                } else if (isActionGamepadCapture) {
+                    AssignGamepadHotkey(gamepadActionIndex, 0);
                 } else {
                     AssignHotkey(g_hotkeyCaptureAction, 0);
                 }
@@ -4254,6 +4651,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     AssignMenuHotkey(vk);
                 } else if (isFreeCamControlCapture) {
                     AssignFreeCamControlHotkey(freeCamControlIndex, vk);
+                } else if (g_hotkeyCaptureAction == kMenuGamepadHotkeyCapture ||
+                           isActionGamepadCapture ||
+                           isFreeCamControlGamepadCapture) {
+                    return true;
                 } else {
                     AssignHotkey(g_hotkeyCaptureAction, vk);
                 }
@@ -4335,11 +4736,12 @@ bool InitImGui(IDXGISwapChain* swapChain) {
 }
 
 void DrawHotkeysTab() {
-    if (ImGui::BeginTable("HotkeyTable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+    if (ImGui::BeginTable("HotkeyTable", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("Function", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("Hotkey", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-        ImGui::TableSetupColumn("Set", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn("Keyboard", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Gamepad", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+        ImGui::TableSetupColumn("Set", ImGuiTableColumnFlags_WidthFixed, 220.0f);
         ImGui::TableHeadersRow();
 
         ImGui::TableNextRow();
@@ -4354,8 +4756,14 @@ void DrawHotkeysTab() {
             ImGui::TextUnformatted(HotkeyName(g_menuHotkey));
         }
         ImGui::TableSetColumnIndex(3);
+        if (g_hotkeyCaptureAction == kMenuGamepadHotkeyCapture) {
+            ImGui::TextUnformatted("Press button...");
+        } else {
+            ImGui::TextUnformatted(GamepadButtonName(g_menuGamepadHotkey));
+        }
+        ImGui::TableSetColumnIndex(4);
         ImGui::PushID("MenuOpen");
-        if (ImGui::Button(g_hotkeyCaptureAction == kMenuHotkeyCapture ? "Cancel" : "Set", ImVec2(64.0f, 0.0f))) {
+        if (ImGui::Button(g_hotkeyCaptureAction == kMenuHotkeyCapture ? "Cancel" : "Set Key", ImVec2(64.0f, 0.0f))) {
             if (g_hotkeyCaptureAction == kMenuHotkeyCapture) {
                 g_hotkeyCaptureAction = -1;
             } else {
@@ -4363,9 +4771,19 @@ void DrawHotkeysTab() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("None", ImVec2(64.0f, 0.0f))) {
+        if (ImGui::Button(g_hotkeyCaptureAction == kMenuGamepadHotkeyCapture ? "Cancel" : "Set Pad", ImVec2(64.0f, 0.0f))) {
+            if (g_hotkeyCaptureAction == kMenuGamepadHotkeyCapture) {
+                g_hotkeyCaptureAction = -1;
+            } else {
+                g_hotkeyCaptureAction = kMenuGamepadHotkeyCapture;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear", ImVec2(64.0f, 0.0f))) {
             AssignMenuHotkey(0);
-            if (g_hotkeyCaptureAction == kMenuHotkeyCapture) {
+            AssignMenuGamepadHotkey(0);
+            if (g_hotkeyCaptureAction == kMenuHotkeyCapture ||
+                g_hotkeyCaptureAction == kMenuGamepadHotkeyCapture) {
                 g_hotkeyCaptureAction = -1;
             }
         }
@@ -4400,8 +4818,15 @@ void DrawHotkeysTab() {
             }
 
             ImGui::TableSetColumnIndex(3);
+            if (g_hotkeyCaptureAction == ActionGamepadCaptureId(i)) {
+                ImGui::TextUnformatted("Press button...");
+            } else {
+                ImGui::TextUnformatted(GamepadButtonName(action.gamepadHotkey));
+            }
+
+            ImGui::TableSetColumnIndex(4);
             ImGui::PushID(i);
-            if (ImGui::Button(g_hotkeyCaptureAction == i ? "Cancel" : "Set", ImVec2(64.0f, 0.0f))) {
+            if (ImGui::Button(g_hotkeyCaptureAction == i ? "Cancel" : "Set Key", ImVec2(64.0f, 0.0f))) {
                 if (g_hotkeyCaptureAction == i) {
                     g_hotkeyCaptureAction = -1;
                 } else {
@@ -4409,9 +4834,19 @@ void DrawHotkeysTab() {
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("None", ImVec2(64.0f, 0.0f))) {
+            if (ImGui::Button(g_hotkeyCaptureAction == ActionGamepadCaptureId(i) ? "Cancel" : "Set Pad", ImVec2(64.0f, 0.0f))) {
+                if (g_hotkeyCaptureAction == ActionGamepadCaptureId(i)) {
+                    g_hotkeyCaptureAction = -1;
+                } else {
+                    g_hotkeyCaptureAction = ActionGamepadCaptureId(i);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Clear", ImVec2(64.0f, 0.0f))) {
                 AssignHotkey(i, 0);
-                if (g_hotkeyCaptureAction == i) {
+                AssignGamepadHotkey(i, 0);
+                if (g_hotkeyCaptureAction == i ||
+                    g_hotkeyCaptureAction == ActionGamepadCaptureId(i)) {
                     g_hotkeyCaptureAction = -1;
                 }
             }
@@ -4425,14 +4860,16 @@ void DrawHotkeysTab() {
     ImGui::Separator();
     ImGui::TextUnformatted("Free Cam Control Hotkeys");
     ImGui::TextDisabled("These are held while Free Cam is active; they are not toggle hotkeys.");
-    if (ImGui::BeginTable("FreeCamControlHotkeyTable", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+    if (ImGui::BeginTable("FreeCamControlHotkeyTable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-        ImGui::TableSetupColumn("Set", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn("Keyboard", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Gamepad", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+        ImGui::TableSetupColumn("Set", ImGuiTableColumnFlags_WidthFixed, 220.0f);
         ImGui::TableHeadersRow();
 
         for (int i = 0; i < kFreeCamControlCount; ++i) {
             const int captureId = FreeCamControlCaptureId(i);
+            const int gamepadCaptureId = FreeCamControlGamepadCaptureId(i);
             ImGui::TableNextRow();
 
             ImGui::TableSetColumnIndex(0);
@@ -4446,8 +4883,15 @@ void DrawHotkeysTab() {
             }
 
             ImGui::TableSetColumnIndex(2);
+            if (g_hotkeyCaptureAction == gamepadCaptureId) {
+                ImGui::TextUnformatted("Press button...");
+            } else {
+                ImGui::TextUnformatted(GamepadButtonName(g_freeCamControls[i].gamepadButton));
+            }
+
+            ImGui::TableSetColumnIndex(3);
             ImGui::PushID(captureId);
-            if (ImGui::Button(g_hotkeyCaptureAction == captureId ? "Cancel" : "Set", ImVec2(64.0f, 0.0f))) {
+            if (ImGui::Button(g_hotkeyCaptureAction == captureId ? "Cancel" : "Set Key", ImVec2(64.0f, 0.0f))) {
                 if (g_hotkeyCaptureAction == captureId) {
                     g_hotkeyCaptureAction = -1;
                 } else {
@@ -4455,9 +4899,19 @@ void DrawHotkeysTab() {
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("None", ImVec2(64.0f, 0.0f))) {
+            if (ImGui::Button(g_hotkeyCaptureAction == gamepadCaptureId ? "Cancel" : "Set Pad", ImVec2(64.0f, 0.0f))) {
+                if (g_hotkeyCaptureAction == gamepadCaptureId) {
+                    g_hotkeyCaptureAction = -1;
+                } else {
+                    g_hotkeyCaptureAction = gamepadCaptureId;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Clear", ImVec2(64.0f, 0.0f))) {
                 AssignFreeCamControlHotkey(i, 0);
-                if (g_hotkeyCaptureAction == captureId) {
+                AssignFreeCamControlGamepadHotkey(i, 0);
+                if (g_hotkeyCaptureAction == captureId ||
+                    g_hotkeyCaptureAction == gamepadCaptureId) {
                     g_hotkeyCaptureAction = -1;
                 }
             }
@@ -5299,14 +5753,23 @@ HRESULT __stdcall HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT
         InitImGui(swapChain);
     }
 
+    UpdateGamepadStates();
+
     static bool menuWasDown = false;
     const bool menuIsDown =
-        g_menuHotkey != 0 &&
-        g_suppressedHotkeyVk != g_menuHotkey &&
-        (QueryPhysicalKeyState(g_menuHotkey) & 0x8000) != 0;
+        ((g_menuHotkey != 0 &&
+          g_suppressedHotkeyVk != g_menuHotkey &&
+          (QueryPhysicalKeyState(g_menuHotkey) & 0x8000) != 0) ||
+         (g_menuGamepadHotkey != 0 &&
+          g_suppressedHotkeyGamepadButton != g_menuGamepadHotkey &&
+          IsGamepadButtonDown(g_menuGamepadHotkey)));
     if (menuIsDown && !menuWasDown) {
         g_menuOpen = !g_menuOpen;
-        Logf("Menu %s from hotkey %s.", g_menuOpen ? "opened" : "closed", HotkeyName(g_menuHotkey));
+        if (g_menuHotkey != 0 && IsPhysicalKeyDown(g_menuHotkey)) {
+            Logf("Menu %s from hotkey %s.", g_menuOpen ? "opened" : "closed", HotkeyName(g_menuHotkey));
+        } else {
+            Logf("Menu %s from gamepad hotkey %s.", g_menuOpen ? "opened" : "closed", GamepadButtonName(g_menuGamepadHotkey));
+        }
         RefreshInputCaptureState();
         if (!g_menuOpen) {
             ReleaseMenuInputState();
@@ -5316,6 +5779,9 @@ HRESULT __stdcall HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT
     if (g_suppressedHotkeyVk != 0 && (QueryPhysicalKeyState(g_suppressedHotkeyVk) & 0x8000) == 0) {
         g_suppressedHotkeyVk = 0;
     }
+    if (g_suppressedHotkeyGamepadButton != 0 && !IsGamepadButtonDown(g_suppressedHotkeyGamepadButton)) {
+        g_suppressedHotkeyGamepadButton = 0;
+    }
 
     if (g_imguiReady) {
         if (g_menuOpen && GetForegroundWindow() != g_gameWindow) {
@@ -5323,6 +5789,7 @@ HRESULT __stdcall HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT
             ReleaseMenuInputState();
         }
         UpdateMouseWindowLock();
+        ProcessGamepadCapture();
         ProcessHotkeys();
         if (g_freeCamEnabled) {
             UpdateFreeCam();
@@ -5334,6 +5801,12 @@ HRESULT __stdcall HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT
         io.MouseDown[0] = g_menuOpen && ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
         io.MouseDown[1] = g_menuOpen && ((GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
         io.MouseDown[2] = g_menuOpen && ((GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0);
+        if (g_menuOpen) {
+            io.MouseWheel += g_pendingMouseWheel;
+            io.MouseWheelH += g_pendingMouseWheelH;
+        }
+        g_pendingMouseWheel = 0.0f;
+        g_pendingMouseWheelH = 0.0f;
         ImGui::NewFrame();
 
         if (g_menuOpen) {
@@ -5472,6 +5945,9 @@ HRESULT __stdcall HookGetDeviceState(IDirectInputDevice8A* device, DWORD dataSiz
     const HRESULT result = original(device, dataSize, data);
     if (SUCCEEDED(result) && data && dataSize > 0) {
         const bool isMouse = IsMouseDevice(device);
+        if (isMouse && g_menuOpen) {
+            AccumulateMouseWheelDelta(data, dataSize);
+        }
         if (g_menuOpen) {
             if (IsMouseInputCaptureActive() && isMouse) {
                 memset(data, 0, dataSize);
@@ -5508,6 +5984,9 @@ HRESULT __stdcall HookGetDeviceData(IDirectInputDevice8A* device,
     const HRESULT result = original(device, objectDataSize, objectData, inOut, flags);
     if (SUCCEEDED(result) && inOut) {
         const bool isMouse = IsMouseDevice(device);
+        if (isMouse && g_menuOpen && objectData && *inOut > 0) {
+            AccumulateMouseWheelDelta(objectData, *inOut);
+        }
         if (g_menuOpen) {
             if (IsMouseInputCaptureActive() && isMouse) {
                 *inOut = 0;

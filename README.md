@@ -89,7 +89,7 @@ Unlocks can irreversibly softlock your save if an unlocked item was supposed to 
 - Optional keyboard input blocking while the AC4Tools UI is open
 - Optional AC4Tools hotkey blocking while the AC4Tools UI is open
 - Saved menu window position and size after dragging/resizing
-- Configurable hotkeys for the menu, toggleable features, and Free Cam controls
+- Configurable keyboard and XInput gamepad hotkeys for the menu, toggleable features, and Free Cam controls
 - In-game UI opened with the configured menu hotkey, `B` by default
 - Optional console and file logging for patch status and diagnostics
 - INFO/WARN/ERROR log levels; console warnings are yellow and errors are red
@@ -103,7 +103,7 @@ Unlocks can irreversibly softlock your save if an unlocked item was supposed to 
 
 `Toggle Crouch` is a one-shot action in the Game tab. It toggles Edward's crouch state directly. Its hotkey is optional and unbound by default.
 
-`Free Cam` installs its camera hooks only when enabled from the Game tab or its assigned hotkey. Use the mouse to aim. Default controls are `Num8`/`Num2` for forward/back, `Num4`/`Num6` to strafe, `Num7`/`Num9` to move up/down, hold `Shift` to speed up, and press `F10` to exit. Movement, boost, and exit keys can be changed in the Hotkeys tab under `Free Cam Control Hotkeys`. `Free Cam Look Speed` scales mouse-look sensitivity while Free Cam is enabled.
+`Free Cam` installs its camera hooks only when enabled from the Game tab or its assigned hotkey. Use the mouse to aim. Default keyboard controls are `Num8`/`Num2` for forward/back, `Num4`/`Num6` to strafe, `Num7`/`Num9` to move up/down, hold `Shift` to speed up, and press `F10` to exit. Default controller controls are D-pad for movement, `LB`/`RB` for up/down, `LT` for boost, and `B` to exit. Movement, boost, and exit bindings can be changed in the Hotkeys tab under `Free Cam Control Hotkeys`. `Free Cam Look Speed` scales mouse-look sensitivity while Free Cam is enabled.
 
 If the `One-time Inventory Refill` buttons are disabled, load a save and open an inventory or ship menu first.
 
@@ -203,34 +203,63 @@ BoostSpeed = 5.000000
 
 [Hotkeys]
 MenuOpen = 66
+MenuOpenGamepad = 0
 ShipGodmode = 0
+ShipGodmodeGamepad = 0
 NoCannonCooldown = 0
+NoCannonCooldownGamepad = 0
 AllyGodmode = 0
+AllyGodmodeGamepad = 0
 PlayerGodmode = 0
+PlayerGodmodeGamepad = 0
+DesynchronizeYourself = 0
+DesynchronizeYourselfGamepad = 0
 InfiniteBreath = 0
+InfiniteBreathGamepad = 0
 StealthMode = 0
+StealthModeGamepad = 0
 NoReload = 0
+NoReloadGamepad = 0
 NoFallDamage = 0
+NoFallDamageGamepad = 0
 EagleVisionSprint = 0
+EagleVisionSprintGamepad = 0
 KillCiviliansNoDesync = 0
+KillCiviliansNoDesyncGamepad = 0
 ShowCollectibles = 0
+ShowCollectiblesGamepad = 0
 LockConsumables = 0
+LockConsumablesGamepad = 0
 FreezeMissionTimer = 0
+FreezeMissionTimerGamepad = 0
 Noclip = 0
+NoclipGamepad = 0
 TimeScale = 0
+TimeScaleGamepad = 0
 ToggleHood = 0
+ToggleHoodGamepad = 0
 ToggleCrouch = 0
+ToggleCrouchGamepad = 0
 FreeCam = 0
+FreeCamGamepad = 0
 
 [FreeCamControls]
 MoveForward = 104
+MoveForwardGamepad = 4101
 MoveBackward = 98
+MoveBackwardGamepad = 4102
 StrafeLeft = 100
+StrafeLeftGamepad = 4103
 StrafeRight = 102
+StrafeRightGamepad = 4104
 MoveUp = 103
+MoveUpGamepad = 4105
 MoveDown = 105
+MoveDownGamepad = 4106
 Boost = 16
+BoostGamepad = 4111
 Exit = 121
+ExitGamepad = 4098
 ```
 
 `EnableConsole = 1` opens a console window. `EnableFile = 1` writes timestamped lines to `AC4Tools.log` in the `scripts` folder next to `AC4Tools.asi`. Both are off by default.
@@ -243,7 +272,7 @@ Logs include `[INFO]`, `[WARN]`, and `[ERROR]` levels. When console logging is e
 
 `WindowPosX`, `WindowPosY`, `WindowSizeX`, and `WindowSizeY` store the last menu position and size after you finish dragging or resizing the window.
 
-Hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Free Cam control defaults are numpad movement, `Boost = 16` for `Shift`, and `Exit = 121` for `F10`. Use the in-game Hotkeys tab to set them instead of editing by hand.
+Keyboard hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Gamepad hotkey values are AC4Tools XInput IDs: `4097=A`, `4098=B`, `4099=X`, `4100=Y`, `4101-4104=D-pad Up/Down/Left/Right`, `4105=LB`, `4106=RB`, `4107=L3`, `4108=R3`, `4109=Back`, `4110=Start`, `4111=LT`, `4112=RT`, `4113-4116=Left Stick Up/Down/Left/Right`, and `4117-4120=Right Stick Up/Down/Left/Right`. Free Cam defaults are numpad movement on keyboard and D-pad/LB/RB/LT/B on controller. Use the in-game Hotkeys tab to set them instead of editing by hand.
 
 ## Third-Party Components
 
