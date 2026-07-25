@@ -15,11 +15,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "AC4Tools"
             VALUE "FileDescription", "AC4Tools ASI Plugin"
-            VALUE "FileVersion", "1.06"
+            VALUE "FileVersion", "1.07"
             VALUE "InternalName", "AC4Tools"
             VALUE "OriginalFilename", "AC4Tools.asi"
             VALUE "ProductName", "AC4Tools"
-            VALUE "ProductVersion", "1.06"
+            VALUE "ProductVersion", "1.07"
         END
     END
     BLOCK "VarFileInfo"
