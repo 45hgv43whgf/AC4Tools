@@ -90,7 +90,7 @@ Unlocks can irreversibly softlock your save if an unlocked item was supposed to 
 - Optional controller input blocking while the AC4Tools UI is open
 - Optional AC4Tools hotkey blocking while the AC4Tools UI is open
 - Saved menu window position and size after dragging/resizing
-- Configurable keyboard and XInput gamepad hotkeys for the menu, toggleable features, and Free Cam controls
+- Configurable keyboard and controller hotkeys for the menu, toggleable features, and Free Cam controls
 - In-game UI opened with the configured menu hotkey, `B` by default
 - Optional console and file logging for patch status and diagnostics
 - INFO/WARN/ERROR log levels; console warnings are yellow and errors are red
@@ -274,7 +274,7 @@ Logs include `[INFO]`, `[WARN]`, and `[ERROR]` levels. When console logging is e
 
 `WindowPosX`, `WindowPosY`, `WindowSizeX`, and `WindowSizeY` store the last menu position and size after you finish dragging or resizing the window.
 
-Keyboard hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Gamepad hotkey values are AC4Tools XInput IDs: `4097=A`, `4098=B`, `4099=X`, `4100=Y`, `4101-4104=D-pad Up/Down/Left/Right`, `4105=LB`, `4106=RB`, `4107=L3`, `4108=R3`, `4109=Back`, `4110=Start`, `4111=LT`, `4112=RT`, `4113-4116=Left Stick Up/Down/Left/Right`, and `4117-4120=Right Stick Up/Down/Left/Right`. Free Cam defaults are numpad movement on keyboard and D-pad/LB/RB/LT/B on controller. Use the in-game Hotkeys tab to set them instead of editing by hand.
+Keyboard hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Controller hotkey values are AC4Tools controller IDs used for both XInput and DirectInput paths: `4097=A`, `4098=B`, `4099=X`, `4100=Y`, `4101-4104=D-pad Up/Down/Left/Right`, `4105=LB`, `4106=RB`, `4107=L3`, `4108=R3`, `4109=Back`, `4110=Start`, `4111=LT`, `4112=RT`, `4113-4116=Left Stick Up/Down/Left/Right`, and `4117-4120=Right Stick Up/Down/Left/Right`. Free Cam defaults are numpad movement on keyboard and D-pad/LB/RB/LT/B on controller. Use the in-game Hotkeys tab to set them instead of editing by hand.
 
 ## Third-Party Components
 
