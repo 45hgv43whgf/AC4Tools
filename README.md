@@ -87,6 +87,7 @@ Unlocks can irreversibly softlock your save if an unlocked item was supposed to 
 - Optional mouse lock to keep the Windows cursor inside the game window
 - Optional mouse input blocking while the AC4Tools UI is open
 - Optional keyboard input blocking while the AC4Tools UI is open
+- Optional controller input blocking while the AC4Tools UI is open
 - Optional AC4Tools hotkey blocking while the AC4Tools UI is open
 - Saved menu window position and size after dragging/resizing
 - Configurable keyboard and XInput gamepad hotkeys for the menu, toggleable features, and Free Cam controls
@@ -183,6 +184,7 @@ EnableFile = 0
 LockMouseToWindow = 0
 DisableMouseInputWhenUiOpen = 0
 DisableKeyboardInputWhenUiOpen = 0
+DisableControllerInputWhenUiOpen = 0
 DisableHotkeysWhileUiOpen = 0
 
 [UI]
@@ -268,7 +270,7 @@ Logs include `[INFO]`, `[WARN]`, and `[ERROR]` levels. When console logging is e
 
 `LockMouseToWindow = 1` confines the Windows cursor to the AC4 window while the game is focused. It releases automatically when AC4 loses focus, such as when you alt-tab. This can prevent scrolling or clicking on a second monitor during gameplay.
 
-`DisableMouseInputWhenUiOpen = 1` blocks mouse input from reaching the game while the AC4Tools UI is open. `DisableKeyboardInputWhenUiOpen = 1` does the same for keyboard input. `DisableHotkeysWhileUiOpen = 1` stops AC4Tools feature hotkeys from firing while the UI is open, while still letting the menu open/close hotkey work. All three are off by default.
+`DisableMouseInputWhenUiOpen = 1` blocks mouse input from reaching the game while the AC4Tools UI is open. `DisableKeyboardInputWhenUiOpen = 1` does the same for keyboard input. `DisableControllerInputWhenUiOpen = 1` blocks DirectInput and common XInput controller state from reaching the game while the UI is open. `DisableHotkeysWhileUiOpen = 1` stops AC4Tools feature hotkeys, including controller hotkeys, from firing while the UI is open, while still letting the menu open/close hotkey work. All four are off by default.
 
 `WindowPosX`, `WindowPosY`, `WindowSizeX`, and `WindowSizeY` store the last menu position and size after you finish dragging or resizing the window.
 

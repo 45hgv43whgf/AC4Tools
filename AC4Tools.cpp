@@ -262,6 +262,7 @@ bool g_fileLoggingEnabled = false;
 bool g_lockMouseToWindow = false;
 bool g_disableMouseInputWhenUiOpen = false;
 bool g_disableKeyboardInputWhenUiOpen = false;
+bool g_disableControllerInputWhenUiOpen = false;
 bool g_disableHotkeysWhileUiOpen = false;
 volatile LONG g_timeIntervalHits = 0;
 volatile LONG g_playerHealthHits = 0;
@@ -419,6 +420,7 @@ using GetDeviceDataFn = HRESULT(__stdcall*)(IDirectInputDevice8A*, DWORD, LPDIDE
 using GetAsyncKeyStateFn = SHORT(WINAPI*)(int);
 using GetKeyStateFn = SHORT(WINAPI*)(int);
 using GetKeyboardStateFn = BOOL(WINAPI*)(PBYTE);
+using XInputGetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
 GetDeviceStateFn g_originalGetDeviceStateMouse = nullptr;
 GetDeviceStateFn g_originalGetDeviceStateKeyboard = nullptr;
 GetDeviceDataFn g_originalGetDeviceDataMouse = nullptr;
@@ -426,12 +428,27 @@ GetDeviceDataFn g_originalGetDeviceDataKeyboard = nullptr;
 GetAsyncKeyStateFn g_originalGetAsyncKeyState = nullptr;
 GetKeyStateFn g_originalGetKeyState = nullptr;
 GetKeyboardStateFn g_originalGetKeyboardState = nullptr;
+XInputGetStateFn g_originalXInputGetState = nullptr;
+XInputGetStateFn g_originalXInputGetState9 = nullptr;
+XInputGetStateFn g_originalXInputGetState14 = nullptr;
+XInputGetStateFn g_originalXInputGetState13 = nullptr;
+XInputGetStateFn g_originalXInputGetState12 = nullptr;
+XInputGetStateFn g_originalXInputGetState11 = nullptr;
 XINPUT_STATE g_gamepadStates[XUSER_MAX_COUNT]{};
 XINPUT_STATE g_previousGamepadStates[XUSER_MAX_COUNT]{};
 bool g_gamepadConnected[XUSER_MAX_COUNT]{};
 bool g_previousGamepadConnected[XUSER_MAX_COUNT]{};
 float g_pendingMouseWheel = 0.0f;
 float g_pendingMouseWheelH = 0.0f;
+bool g_directInputGamepadButtons[24]{};
+bool g_previousDirectInputGamepadButtons[24]{};
+bool g_directInputGamepadActive = false;
+bool g_previousDirectInputGamepadActive = false;
+IDirectInput8A* g_controllerDirectInput = nullptr;
+constexpr int kMaxPolledControllers = 8;
+IDirectInputDevice8A* g_controllerDevices[kMaxPolledControllers]{};
+int g_controllerDeviceCount = 0;
+bool g_controllerPollingInitialized = false;
 
 void InitConsole();
 void __stdcall UpdateNoclipState();
@@ -459,6 +476,13 @@ bool IsGamepadButtonDown(int button);
 bool WasGamepadButtonJustPressed(int button);
 void ClearKeyboardHotkeyConflicts(int vk, int actionToSkip, int freeCamControlToSkip);
 void ClearGamepadHotkeyConflicts(int button, int actionToSkip, int freeCamControlToSkip);
+bool IsControllerDevice(IDirectInputDevice8A* device);
+BOOL CALLBACK EnumControllerDevicesCallback(const DIDEVICEINSTANCEA* instance, VOID* context);
+void ReleasePolledControllerDevices();
+void BeginControllerPollingFrame();
+void InitializeControllerPolling();
+void PollControllerDevices();
+void CaptureDirectInputControllerStateFromJoystick(const DIJOYSTATE2& state);
 
 struct ToggleAction {
     const char* id;
@@ -628,8 +652,14 @@ bool IsKeyboardInputCaptureActive() {
     return g_menuOpen && g_disableKeyboardInputWhenUiOpen;
 }
 
+bool IsControllerInputCaptureActive() {
+    return g_menuOpen && g_disableControllerInputWhenUiOpen;
+}
+
 void RefreshInputCaptureState() {
-    SetGameInputCaptured(IsMouseInputCaptureActive() || IsKeyboardInputCaptureActive());
+    SetGameInputCaptured(IsMouseInputCaptureActive() ||
+                         IsKeyboardInputCaptureActive() ||
+                         IsControllerInputCaptureActive());
 }
 
 bool IsMouseDevice(IDirectInputDevice8A* device) {
@@ -654,6 +684,19 @@ bool IsKeyboardDevice(IDirectInputDevice8A* device) {
         return false;
     }
     return GET_DIDEVICE_TYPE(caps.dwDevType) == DI8DEVTYPE_KEYBOARD;
+}
+
+bool IsControllerDevice(IDirectInputDevice8A* device) {
+    if (!device) {
+        return false;
+    }
+    DIDEVCAPS caps{};
+    caps.dwSize = sizeof(caps);
+    if (FAILED(device->GetCapabilities(&caps))) {
+        return false;
+    }
+    const DWORD deviceType = GET_DIDEVICE_TYPE(caps.dwDevType);
+    return deviceType == DI8DEVTYPE_GAMEPAD || deviceType == DI8DEVTYPE_JOYSTICK;
 }
 
 bool IsMouseVirtualKey(int vk) {
@@ -993,6 +1036,169 @@ const char* GamepadButtonName(int button) {
     }
 }
 
+int GamepadButtonIndex(int button) {
+    for (int i = 0; i < static_cast<int>(sizeof(kBindableGamepadButtons) / sizeof(kBindableGamepadButtons[0])); ++i) {
+        if (kBindableGamepadButtons[i] == button) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool IsDirectInputGamepadButtonDown(int button) {
+    const int index = GamepadButtonIndex(button);
+    return index >= 0 && index < static_cast<int>(sizeof(g_directInputGamepadButtons) / sizeof(g_directInputGamepadButtons[0])) &&
+           g_directInputGamepadButtons[index];
+}
+
+bool WasDirectInputGamepadButtonJustPressed(int button) {
+    const int index = GamepadButtonIndex(button);
+    return index >= 0 &&
+           index < static_cast<int>(sizeof(g_directInputGamepadButtons) / sizeof(g_directInputGamepadButtons[0])) &&
+           g_directInputGamepadButtons[index] &&
+           !g_previousDirectInputGamepadButtons[index];
+}
+
+void SetDirectInputGamepadButtonState(int button, bool down) {
+    const int index = GamepadButtonIndex(button);
+    if (index < 0 || index >= static_cast<int>(sizeof(g_directInputGamepadButtons) / sizeof(g_directInputGamepadButtons[0]))) {
+        return;
+    }
+    g_directInputGamepadButtons[index] = down;
+    if (down) {
+        g_directInputGamepadActive = true;
+    }
+}
+
+bool IsDirectInputPovDirectionActive(DWORD povValue, int direction) {
+    if (LOWORD(povValue) == 0xFFFF) {
+        return false;
+    }
+    switch (direction) {
+        case 0: return povValue <= 4500 || povValue >= 31500;
+        case 1: return povValue >= 13500 && povValue <= 22500;
+        case 2: return povValue >= 22500 && povValue <= 31500;
+        case 3: return povValue >= 4500 && povValue <= 13500;
+        default: return false;
+    }
+}
+
+bool IsDirectInputAxisHigh(LONG value) {
+    return value >= 45000;
+}
+
+bool IsDirectInputAxisLow(LONG value) {
+    return value <= 20535;
+}
+
+void ReleasePolledControllerDevices() {
+    for (int i = 0; i < g_controllerDeviceCount; ++i) {
+        if (g_controllerDevices[i]) {
+            g_controllerDevices[i]->Unacquire();
+            g_controllerDevices[i]->Release();
+            g_controllerDevices[i] = nullptr;
+        }
+    }
+    g_controllerDeviceCount = 0;
+    if (g_controllerDirectInput) {
+        g_controllerDirectInput->Release();
+        g_controllerDirectInput = nullptr;
+    }
+    g_controllerPollingInitialized = false;
+}
+
+BOOL CALLBACK EnumControllerDevicesCallback(const DIDEVICEINSTANCEA* instance, VOID* context) {
+    (void)context;
+    if (!g_controllerDirectInput || !instance || g_controllerDeviceCount >= kMaxPolledControllers) {
+        return DIENUM_STOP;
+    }
+
+    IDirectInputDevice8A* device = nullptr;
+    if (FAILED(g_controllerDirectInput->CreateDevice(instance->guidInstance, &device, nullptr)) || !device) {
+        return DIENUM_CONTINUE;
+    }
+
+    if (FAILED(device->SetDataFormat(&c_dfDIJoystick2))) {
+        device->Release();
+        return DIENUM_CONTINUE;
+    }
+
+    HWND coopWindow = g_gameWindow ? g_gameWindow : GetDesktopWindow();
+    if (FAILED(device->SetCooperativeLevel(coopWindow, DISCL_BACKGROUND | DISCL_NONEXCLUSIVE))) {
+        device->Release();
+        return DIENUM_CONTINUE;
+    }
+
+    device->Acquire();
+    g_controllerDevices[g_controllerDeviceCount++] = device;
+    return g_controllerDeviceCount >= kMaxPolledControllers ? DIENUM_STOP : DIENUM_CONTINUE;
+}
+
+void BeginControllerPollingFrame() {
+    for (int i = 0; i < static_cast<int>(sizeof(g_directInputGamepadButtons) / sizeof(g_directInputGamepadButtons[0])); ++i) {
+        g_previousDirectInputGamepadButtons[i] = g_directInputGamepadButtons[i];
+        g_directInputGamepadButtons[i] = false;
+    }
+    g_previousDirectInputGamepadActive = g_directInputGamepadActive;
+    g_directInputGamepadActive = false;
+}
+
+void InitializeControllerPolling() {
+    if (g_controllerPollingInitialized) {
+        return;
+    }
+    ReleasePolledControllerDevices();
+    HRESULT hr = DirectInput8Create(GetModuleHandleA(nullptr),
+                                    DIRECTINPUT_VERSION,
+                                    IID_IDirectInput8A,
+                                    reinterpret_cast<void**>(&g_controllerDirectInput),
+                                    nullptr);
+    if (FAILED(hr) || !g_controllerDirectInput) {
+        LogWarn("DirectInput8Create failed for controller polling.");
+        return;
+    }
+
+    hr = g_controllerDirectInput->EnumDevices(DI8DEVCLASS_GAMECTRL,
+                                              EnumControllerDevicesCallback,
+                                              nullptr,
+                                              DIEDFL_ATTACHEDONLY);
+    if (FAILED(hr)) {
+        LogWarn("DirectInput controller enumeration failed.");
+        ReleasePolledControllerDevices();
+        return;
+    }
+
+    g_controllerPollingInitialized = true;
+    Logf("Controller polling initialized with %d DirectInput device(s).", g_controllerDeviceCount);
+}
+
+void PollControllerDevices() {
+    if (!g_controllerPollingInitialized) {
+        InitializeControllerPolling();
+    }
+    for (int i = 0; i < g_controllerDeviceCount; ++i) {
+        IDirectInputDevice8A* device = g_controllerDevices[i];
+        if (!device) {
+            continue;
+        }
+
+        DIJOYSTATE2 state{};
+        HRESULT hr = device->Poll();
+        if (FAILED(hr)) {
+            device->Acquire();
+        }
+        hr = device->GetDeviceState(sizeof(state), &state);
+        if (hr == DIERR_INPUTLOST || hr == DIERR_NOTACQUIRED) {
+            if (SUCCEEDED(device->Acquire())) {
+                hr = device->GetDeviceState(sizeof(state), &state);
+            }
+        }
+        if (SUCCEEDED(hr)) {
+            CaptureDirectInputControllerStateFromJoystick(state);
+        }
+    }
+}
+
 bool IsBindableHotkey(int vk) {
     if (vk <= 0 || vk >= 256) {
         return false;
@@ -1012,6 +1218,7 @@ void SaveConfig() {
     WritePrivateProfileStringA("System", "LockMouseToWindow", g_lockMouseToWindow ? "1" : "0", path);
     WritePrivateProfileStringA("System", "DisableMouseInputWhenUiOpen", g_disableMouseInputWhenUiOpen ? "1" : "0", path);
     WritePrivateProfileStringA("System", "DisableKeyboardInputWhenUiOpen", g_disableKeyboardInputWhenUiOpen ? "1" : "0", path);
+    WritePrivateProfileStringA("System", "DisableControllerInputWhenUiOpen", g_disableControllerInputWhenUiOpen ? "1" : "0", path);
     WritePrivateProfileStringA("System", "DisableHotkeysWhileUiOpen", g_disableHotkeysWhileUiOpen ? "1" : "0", path);
     sprintf_s(value, "%.0f", g_menuPos.x);
     WritePrivateProfileStringA("UI", "WindowPosX", value, path);
@@ -2357,6 +2564,7 @@ void LoadConfig() {
     g_lockMouseToWindow = GetPrivateProfileIntA("System", "LockMouseToWindow", 0, ownPath) != 0;
     g_disableMouseInputWhenUiOpen = GetPrivateProfileIntA("System", "DisableMouseInputWhenUiOpen", 0, ownPath) != 0;
     g_disableKeyboardInputWhenUiOpen = GetPrivateProfileIntA("System", "DisableKeyboardInputWhenUiOpen", 0, ownPath) != 0;
+    g_disableControllerInputWhenUiOpen = GetPrivateProfileIntA("System", "DisableControllerInputWhenUiOpen", 0, ownPath) != 0;
     g_disableHotkeysWhileUiOpen = GetPrivateProfileIntA("System", "DisableHotkeysWhileUiOpen", 0, ownPath) != 0;
     char windowPosValue[32]{};
     GetPrivateProfileStringA("UI", "WindowPosX", "60", windowPosValue, sizeof(windowPosValue), ownPath);
@@ -2945,6 +3153,96 @@ void AccumulateMouseWheelDelta(LPDIDEVICEOBJECTDATA objectData, DWORD count) {
     for (DWORD i = 0; i < count; ++i) {
         if (objectData[i].dwOfs == DIMOFS_Z) {
             AccumulateMouseWheelDelta(static_cast<LONG>(objectData[i].dwData));
+        }
+    }
+}
+
+void CaptureDirectInputControllerStateFromJoystick(const DIJOYSTATE2& state) {
+    SetDirectInputGamepadButtonState(kGamepadButtonA, state.rgbButtons[0] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonB, state.rgbButtons[1] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonX, state.rgbButtons[2] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonY, state.rgbButtons[3] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonLeftShoulder, state.rgbButtons[4] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonRightShoulder, state.rgbButtons[5] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonBack, state.rgbButtons[6] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonStart, state.rgbButtons[7] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonLeftThumb, state.rgbButtons[8] != 0);
+    SetDirectInputGamepadButtonState(kGamepadButtonRightThumb, state.rgbButtons[9] != 0);
+
+    const DWORD pov = state.rgdwPOV[0];
+    SetDirectInputGamepadButtonState(kGamepadButtonDpadUp, IsDirectInputPovDirectionActive(pov, 0));
+    SetDirectInputGamepadButtonState(kGamepadButtonDpadDown, IsDirectInputPovDirectionActive(pov, 1));
+    SetDirectInputGamepadButtonState(kGamepadButtonDpadLeft, IsDirectInputPovDirectionActive(pov, 2));
+    SetDirectInputGamepadButtonState(kGamepadButtonDpadRight, IsDirectInputPovDirectionActive(pov, 3));
+
+    SetDirectInputGamepadButtonState(kGamepadButtonLeftStickLeft, IsDirectInputAxisLow(state.lX));
+    SetDirectInputGamepadButtonState(kGamepadButtonLeftStickRight, IsDirectInputAxisHigh(state.lX));
+    SetDirectInputGamepadButtonState(kGamepadButtonLeftStickUp, IsDirectInputAxisLow(state.lY));
+    SetDirectInputGamepadButtonState(kGamepadButtonLeftStickDown, IsDirectInputAxisHigh(state.lY));
+    SetDirectInputGamepadButtonState(kGamepadButtonRightStickLeft, IsDirectInputAxisLow(state.lRx));
+    SetDirectInputGamepadButtonState(kGamepadButtonRightStickRight, IsDirectInputAxisHigh(state.lRx));
+    SetDirectInputGamepadButtonState(kGamepadButtonRightStickUp, IsDirectInputAxisLow(state.lRy));
+    SetDirectInputGamepadButtonState(kGamepadButtonRightStickDown, IsDirectInputAxisHigh(state.lRy));
+    SetDirectInputGamepadButtonState(kGamepadButtonLeftTrigger, IsDirectInputAxisLow(state.lZ));
+    SetDirectInputGamepadButtonState(kGamepadButtonRightTrigger, IsDirectInputAxisHigh(state.lZ));
+}
+
+void CaptureDirectInputControllerState(LPVOID data, DWORD dataSize) {
+    if (!data || dataSize < sizeof(DIJOYSTATE2)) {
+        return;
+    }
+    CaptureDirectInputControllerStateFromJoystick(*static_cast<DIJOYSTATE2*>(data));
+}
+
+void CaptureDirectInputControllerState(LPDIDEVICEOBJECTDATA objectData, DWORD count) {
+    if (!objectData) {
+        return;
+    }
+    for (DWORD i = 0; i < count; ++i) {
+        const DWORD ofs = objectData[i].dwOfs;
+        const DWORD data = objectData[i].dwData;
+        if (ofs >= DIJOFS_BUTTON0 && ofs < DIJOFS_BUTTON0 + 10) {
+            const int buttonIndex = static_cast<int>(ofs - DIJOFS_BUTTON0);
+            switch (buttonIndex) {
+                case 0: SetDirectInputGamepadButtonState(kGamepadButtonA, (data & 0x80) != 0); break;
+                case 1: SetDirectInputGamepadButtonState(kGamepadButtonB, (data & 0x80) != 0); break;
+                case 2: SetDirectInputGamepadButtonState(kGamepadButtonX, (data & 0x80) != 0); break;
+                case 3: SetDirectInputGamepadButtonState(kGamepadButtonY, (data & 0x80) != 0); break;
+                case 4: SetDirectInputGamepadButtonState(kGamepadButtonLeftShoulder, (data & 0x80) != 0); break;
+                case 5: SetDirectInputGamepadButtonState(kGamepadButtonRightShoulder, (data & 0x80) != 0); break;
+                case 6: SetDirectInputGamepadButtonState(kGamepadButtonBack, (data & 0x80) != 0); break;
+                case 7: SetDirectInputGamepadButtonState(kGamepadButtonStart, (data & 0x80) != 0); break;
+                case 8: SetDirectInputGamepadButtonState(kGamepadButtonLeftThumb, (data & 0x80) != 0); break;
+                case 9: SetDirectInputGamepadButtonState(kGamepadButtonRightThumb, (data & 0x80) != 0); break;
+                default: break;
+            }
+            continue;
+        }
+
+        if (ofs == DIJOFS_POV(0)) {
+            SetDirectInputGamepadButtonState(kGamepadButtonDpadUp, IsDirectInputPovDirectionActive(data, 0));
+            SetDirectInputGamepadButtonState(kGamepadButtonDpadDown, IsDirectInputPovDirectionActive(data, 1));
+            SetDirectInputGamepadButtonState(kGamepadButtonDpadLeft, IsDirectInputPovDirectionActive(data, 2));
+            SetDirectInputGamepadButtonState(kGamepadButtonDpadRight, IsDirectInputPovDirectionActive(data, 3));
+            continue;
+        }
+
+        const LONG axisValue = static_cast<LONG>(data);
+        if (ofs == DIJOFS_X) {
+            SetDirectInputGamepadButtonState(kGamepadButtonLeftStickLeft, IsDirectInputAxisLow(axisValue));
+            SetDirectInputGamepadButtonState(kGamepadButtonLeftStickRight, IsDirectInputAxisHigh(axisValue));
+        } else if (ofs == DIJOFS_Y) {
+            SetDirectInputGamepadButtonState(kGamepadButtonLeftStickUp, IsDirectInputAxisLow(axisValue));
+            SetDirectInputGamepadButtonState(kGamepadButtonLeftStickDown, IsDirectInputAxisHigh(axisValue));
+        } else if (ofs == DIJOFS_RX) {
+            SetDirectInputGamepadButtonState(kGamepadButtonRightStickLeft, IsDirectInputAxisLow(axisValue));
+            SetDirectInputGamepadButtonState(kGamepadButtonRightStickRight, IsDirectInputAxisHigh(axisValue));
+        } else if (ofs == DIJOFS_RY) {
+            SetDirectInputGamepadButtonState(kGamepadButtonRightStickUp, IsDirectInputAxisLow(axisValue));
+            SetDirectInputGamepadButtonState(kGamepadButtonRightStickDown, IsDirectInputAxisHigh(axisValue));
+        } else if (ofs == DIJOFS_Z) {
+            SetDirectInputGamepadButtonState(kGamepadButtonLeftTrigger, IsDirectInputAxisLow(axisValue));
+            SetDirectInputGamepadButtonState(kGamepadButtonRightTrigger, IsDirectInputAxisHigh(axisValue));
         }
     }
 }
@@ -4573,7 +4871,8 @@ void UpdateGamepadStates() {
         g_previousGamepadStates[i] = g_gamepadStates[i];
         g_previousGamepadConnected[i] = g_gamepadConnected[i];
         ZeroMemory(&g_gamepadStates[i], sizeof(g_gamepadStates[i]));
-        g_gamepadConnected[i] = XInputGetState(i, &g_gamepadStates[i]) == ERROR_SUCCESS;
+        XInputGetStateFn getState = g_originalXInputGetState ? g_originalXInputGetState : XInputGetState;
+        g_gamepadConnected[i] = getState(i, &g_gamepadStates[i]) == ERROR_SUCCESS;
         if (!g_gamepadConnected[i]) {
             ZeroMemory(&g_gamepadStates[i], sizeof(g_gamepadStates[i]));
         }
@@ -4583,6 +4882,9 @@ void UpdateGamepadStates() {
 bool IsGamepadButtonDown(int button) {
     if (!IsBindableGamepadButton(button)) {
         return false;
+    }
+    if (IsDirectInputGamepadButtonDown(button)) {
+        return true;
     }
     for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
         if (g_gamepadConnected[i] && IsGamepadButtonDownInState(g_gamepadStates[i], button)) {
@@ -4595,6 +4897,9 @@ bool IsGamepadButtonDown(int button) {
 bool WasGamepadButtonJustPressed(int button) {
     if (!IsBindableGamepadButton(button)) {
         return false;
+    }
+    if (WasDirectInputGamepadButtonJustPressed(button)) {
+        return true;
     }
     for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
         const bool downNow = g_gamepadConnected[i] && IsGamepadButtonDownInState(g_gamepadStates[i], button);
@@ -5660,6 +5965,17 @@ void DrawMenu() {
                     "Blocks keyboard input from reaching the game while the AC4Tools UI is open.\n"
                     "Use this if you do not want movement or actions to trigger behind the menu.");
             }
+            if (ImGui::Checkbox("Disable Controller Input while UI is open", &g_disableControllerInputWhenUiOpen)) {
+                SaveConfig();
+                RefreshInputCaptureState();
+                Log(g_disableControllerInputWhenUiOpen ? "Disable Controller Input while UI is open enabled." :
+                                                          "Disable Controller Input while UI is open disabled.");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Blocks controller input from reaching the game while the AC4Tools UI is open.\n"
+                    "AC4Tools can still read controller buttons for menu close and Set Pad capture.");
+            }
             if (ImGui::Checkbox("Disable Hotkeys while UI is open", &g_disableHotkeysWhileUiOpen)) {
                 SaveConfig();
                 Log(g_disableHotkeysWhileUiOpen ? "Disable Hotkeys while UI is open enabled." :
@@ -5692,6 +6008,7 @@ void DrawMenu() {
                 DrawInfoRow("Mouse window lock", g_lockMouseToWindow ? "enabled" : "disabled");
                 DrawInfoRow("Disable mouse input on UI open", g_disableMouseInputWhenUiOpen ? "enabled" : "disabled");
                 DrawInfoRow("Disable keyboard input on UI open", g_disableKeyboardInputWhenUiOpen ? "enabled" : "disabled");
+                DrawInfoRow("Disable controller input on UI open", g_disableControllerInputWhenUiOpen ? "enabled" : "disabled");
                 DrawInfoRow("Disable hotkeys on UI open", g_disableHotkeysWhileUiOpen ? "enabled" : "disabled");
                 DrawInfoRow("Input captured", g_inputCaptured ? "yes" : "no");
                 DrawInfoRowf("Inventory base", "0x%08X", static_cast<unsigned int>(g_inventoryBase));
@@ -5753,7 +6070,9 @@ HRESULT __stdcall HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT
         InitImGui(swapChain);
     }
 
+    BeginControllerPollingFrame();
     UpdateGamepadStates();
+    PollControllerDevices();
 
     static bool menuWasDown = false;
     const bool menuIsDown =
@@ -5932,9 +6251,12 @@ bool InstallDx11Hook() {
 
 HRESULT __stdcall HookGetDeviceState(IDirectInputDevice8A* device, DWORD dataSize, LPVOID data) {
     GetDeviceStateFn original = nullptr;
-    if (IsMouseDevice(device)) {
+    const bool isMouse = IsMouseDevice(device);
+    const bool isKeyboard = IsKeyboardDevice(device);
+    const bool isController = IsControllerDevice(device);
+    if (isMouse) {
         original = g_originalGetDeviceStateMouse ? g_originalGetDeviceStateMouse : g_originalGetDeviceStateKeyboard;
-    } else if (IsKeyboardDevice(device)) {
+    } else if (isKeyboard) {
         original = g_originalGetDeviceStateKeyboard ? g_originalGetDeviceStateKeyboard : g_originalGetDeviceStateMouse;
     } else {
         original = g_originalGetDeviceStateKeyboard ? g_originalGetDeviceStateKeyboard : g_originalGetDeviceStateMouse;
@@ -5944,16 +6266,22 @@ HRESULT __stdcall HookGetDeviceState(IDirectInputDevice8A* device, DWORD dataSiz
     }
     const HRESULT result = original(device, dataSize, data);
     if (SUCCEEDED(result) && data && dataSize > 0) {
-        const bool isMouse = IsMouseDevice(device);
         if (isMouse && g_menuOpen) {
             AccumulateMouseWheelDelta(data, dataSize);
+        }
+        if (isController) {
+            CaptureDirectInputControllerState(data, dataSize);
         }
         if (g_menuOpen) {
             if (IsMouseInputCaptureActive() && isMouse) {
                 memset(data, 0, dataSize);
                 return DI_OK;
             }
-            if (IsKeyboardInputCaptureActive() && !isMouse) {
+            if (IsControllerInputCaptureActive() && isController) {
+                memset(data, 0, dataSize);
+                return DI_OK;
+            }
+            if (IsKeyboardInputCaptureActive() && isKeyboard) {
                 memset(data, 0, dataSize);
                 return DI_OK;
             }
@@ -5971,9 +6299,12 @@ HRESULT __stdcall HookGetDeviceData(IDirectInputDevice8A* device,
                                     LPDWORD inOut,
                                     DWORD flags) {
     GetDeviceDataFn original = nullptr;
-    if (IsMouseDevice(device)) {
+    const bool isMouse = IsMouseDevice(device);
+    const bool isKeyboard = IsKeyboardDevice(device);
+    const bool isController = IsControllerDevice(device);
+    if (isMouse) {
         original = g_originalGetDeviceDataMouse ? g_originalGetDeviceDataMouse : g_originalGetDeviceDataKeyboard;
-    } else if (IsKeyboardDevice(device)) {
+    } else if (isKeyboard) {
         original = g_originalGetDeviceDataKeyboard ? g_originalGetDeviceDataKeyboard : g_originalGetDeviceDataMouse;
     } else {
         original = g_originalGetDeviceDataKeyboard ? g_originalGetDeviceDataKeyboard : g_originalGetDeviceDataMouse;
@@ -5983,16 +6314,22 @@ HRESULT __stdcall HookGetDeviceData(IDirectInputDevice8A* device,
     }
     const HRESULT result = original(device, objectDataSize, objectData, inOut, flags);
     if (SUCCEEDED(result) && inOut) {
-        const bool isMouse = IsMouseDevice(device);
         if (isMouse && g_menuOpen && objectData && *inOut > 0) {
             AccumulateMouseWheelDelta(objectData, *inOut);
+        }
+        if (isController && objectData && *inOut > 0) {
+            CaptureDirectInputControllerState(objectData, *inOut);
         }
         if (g_menuOpen) {
             if (IsMouseInputCaptureActive() && isMouse) {
                 *inOut = 0;
                 return DI_OK;
             }
-            if (IsKeyboardInputCaptureActive() && !isMouse) {
+            if (IsControllerInputCaptureActive() && isController) {
+                *inOut = 0;
+                return DI_OK;
+            }
+            if (IsKeyboardInputCaptureActive() && isKeyboard) {
                 *inOut = 0;
                 return DI_OK;
             }
@@ -6029,6 +6366,87 @@ BOOL WINAPI HookGetKeyboardState(PBYTE keyState) {
         }
     }
     return result;
+}
+
+DWORD WINAPI HookXInputGetStateCommon(XInputGetStateFn original, DWORD userIndex, XINPUT_STATE* state) {
+    if (IsControllerInputCaptureActive()) {
+        if (state) {
+            ZeroMemory(state, sizeof(*state));
+        }
+        return ERROR_SUCCESS;
+    }
+    return original ? original(userIndex, state) : ERROR_DEVICE_NOT_CONNECTED;
+}
+
+DWORD WINAPI HookXInputGetState9(DWORD userIndex, XINPUT_STATE* state) {
+    return HookXInputGetStateCommon(g_originalXInputGetState9, userIndex, state);
+}
+
+DWORD WINAPI HookXInputGetState14(DWORD userIndex, XINPUT_STATE* state) {
+    return HookXInputGetStateCommon(g_originalXInputGetState14, userIndex, state);
+}
+
+DWORD WINAPI HookXInputGetState13(DWORD userIndex, XINPUT_STATE* state) {
+    return HookXInputGetStateCommon(g_originalXInputGetState13, userIndex, state);
+}
+
+DWORD WINAPI HookXInputGetState12(DWORD userIndex, XINPUT_STATE* state) {
+    return HookXInputGetStateCommon(g_originalXInputGetState12, userIndex, state);
+}
+
+DWORD WINAPI HookXInputGetState11(DWORD userIndex, XINPUT_STATE* state) {
+    return HookXInputGetStateCommon(g_originalXInputGetState11, userIndex, state);
+}
+
+bool HookXInputGetStateFromModule(const char* moduleName, XInputGetStateFn hook, XInputGetStateFn* original) {
+    HMODULE module = GetModuleHandleA(moduleName);
+    if (!module) {
+        module = LoadLibraryA(moduleName);
+    }
+    if (!module) {
+        return false;
+    }
+    void* target = reinterpret_cast<void*>(GetProcAddress(module, "XInputGetState"));
+    if (!target) {
+        return false;
+    }
+    const MH_STATUS createStatus = MH_CreateHook(target, hook, reinterpret_cast<void**>(original));
+    if (createStatus != MH_OK && createStatus != MH_ERROR_ALREADY_CREATED) {
+        LogWarnf("MinHook CreateHook %s!XInputGetState failed: %d.", moduleName, createStatus);
+        return false;
+    }
+    const MH_STATUS enableStatus = MH_EnableHook(target);
+    if (enableStatus != MH_OK && enableStatus != MH_ERROR_ENABLED) {
+        LogWarnf("MinHook EnableHook %s!XInputGetState failed: %d.", moduleName, enableStatus);
+        return false;
+    }
+    Logf("%s XInputGetState hook installed.", moduleName);
+    return true;
+}
+
+void InstallXInputHooks() {
+    if (MH_Initialize() != MH_OK && MH_Initialize() != MH_ERROR_ALREADY_INITIALIZED) {
+        LogWarn("MinHook initialize failed for XInput hooks.");
+        return;
+    }
+
+    HookXInputGetStateFromModule("xinput9_1_0.dll", &HookXInputGetState9, &g_originalXInputGetState9);
+    HookXInputGetStateFromModule("xinput1_4.dll", &HookXInputGetState14, &g_originalXInputGetState14);
+    HookXInputGetStateFromModule("xinput1_3.dll", &HookXInputGetState13, &g_originalXInputGetState13);
+    HookXInputGetStateFromModule("xinput1_2.dll", &HookXInputGetState12, &g_originalXInputGetState12);
+    HookXInputGetStateFromModule("xinput1_1.dll", &HookXInputGetState11, &g_originalXInputGetState11);
+
+    if (g_originalXInputGetState9) {
+        g_originalXInputGetState = g_originalXInputGetState9;
+    } else if (g_originalXInputGetState14) {
+        g_originalXInputGetState = g_originalXInputGetState14;
+    } else if (g_originalXInputGetState13) {
+        g_originalXInputGetState = g_originalXInputGetState13;
+    } else if (g_originalXInputGetState12) {
+        g_originalXInputGetState = g_originalXInputGetState12;
+    } else if (g_originalXInputGetState11) {
+        g_originalXInputGetState = g_originalXInputGetState11;
+    }
 }
 
 bool InstallDirectInputHook() {
@@ -6201,6 +6619,7 @@ DWORD WINAPI MainThread(void*) {
     InstallDx11Hook();
     InstallDirectInputHook();
     InstallKeyboardStateHooks();
+    InstallXInputHooks();
     for (;;) {
         Sleep(250);
         UpdateTimeScaleInterval();
