@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 
 $sourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $releaseDir = Join-Path $sourceDir "release"
+. (Join-Path $sourceDir 'tools\loader-integrity.ps1')
 
 function Read-IniFile {
     param(
@@ -59,6 +60,16 @@ foreach ($file in @('scripts\AC4Tools.asi', 'scripts\AC4Tools.ini')) {
     }
 }
 
+# Use the repository's canonical pin, not a potentially replaced manifest in
+# release/. Reject unverified source or destination loaders before any writes.
+$manifest = Join-Path $sourceDir 'release_assets\loader-manifest.json'
+$loaderSource = Join-Path $releaseDir 'dinput8.dll'
+$loaderDest = Join-Path $GameDir 'dinput8.dll'
+Assert-AC4ToolsLoader -Path $loaderSource -ManifestPath $manifest
+if (Test-Path -LiteralPath $loaderDest) {
+    Assert-AC4ToolsLoader -Path $loaderDest -ManifestPath $manifest
+}
+
 $iniPath = Join-Path $GameDir "scripts\AC4Tools.ini"
 $oldConfig = $null
 if (Test-Path -LiteralPath $iniPath) {
@@ -67,8 +78,11 @@ if (Test-Path -LiteralPath $iniPath) {
 
 New-Item -ItemType Directory -Force -Path (Join-Path $GameDir "scripts") | Out-Null
 
-# The loader is supplied and maintained separately by the user. Never copy or
-# replace a loader DLL from the package, including stale release directories.
+# An already verified loader needs no rewrite, including when mapped by the game.
+if (-not (Test-Path -LiteralPath $loaderDest)) {
+    Copy-Item -LiteralPath $loaderSource -Destination $loaderDest
+    Assert-AC4ToolsLoader -Path $loaderDest -ManifestPath $manifest
+}
 $asiPath = Join-Path $GameDir "scripts\AC4Tools.asi"
 try {
     Copy-Item -LiteralPath (Join-Path $releaseDir "scripts\AC4Tools.asi") -Destination $asiPath -Force
@@ -140,8 +154,9 @@ try {
     throw
 }
 
-Get-Item -LiteralPath (Join-Path $GameDir "scripts\AC4Tools.asi"),
+Get-Item -LiteralPath $loaderDest,
+                      (Join-Path $GameDir "scripts\AC4Tools.asi"),
                       $iniPath |
     Select-Object FullName, Length, LastWriteTime
 
-Write-Host "AC4Tools installed. An ASI loader must be installed separately; existing loader files were left untouched."
+Write-Host "AC4Tools installed with the SHA256-verified Win32 ASI loader."

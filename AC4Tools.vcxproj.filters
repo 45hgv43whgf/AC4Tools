@@ -78,6 +78,10 @@
     <None Include="tests\native.cpp"><Filter>Scripts</Filter></None>
     <None Include="tests\dll_smoke.cpp"><Filter>Scripts</Filter></None>
     <None Include="tools\setup_x86.bat"><Filter>Scripts</Filter></None>
+    <None Include="release_assets\loader-manifest.json"><Filter>Resource Files</Filter></None>
+    <None Include="release_assets\Ultimate-ASI-Loader-LICENSE.txt"><Filter>Resource Files</Filter></None>
+    <None Include="tools\loader-integrity.ps1"><Filter>Resource Files</Filter></None>
+    <None Include="release_assets\dinput8.dll"><Filter>Resource Files</Filter></None>
     <None Include="release_assets\README.md"><Filter>Scripts</Filter></None>
     <None Include="test.bat"><Filter>Scripts</Filter></None>
     <None Include="tests\release.ps1"><Filter>Scripts</Filter></None>

@@ -1,0 +1,11 @@
+{
+  "name": "Ultimate ASI Loader",
+  "version": "9.7.1.0-2155f21",
+  "architecture": "Win32/x86",
+  "release_url": "https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/tag/v9.7.1",
+  "archive_url": "https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/download/v9.7.1/Ultimate-ASI-Loader.zip",
+  "archive_sha256": "B69853DF1099DE97B9622B9F693F2FC62269CD7774A26408974F1BCABF806FC3",
+  "archive_member": "dinput8.dll",
+  "dll_sha256": "7675B24A2E408349C8A59B87E3AE8724AD8A89EFF21C96A9C109650A3C1316E0",
+  "verified_date": "2026-10-23"
+}

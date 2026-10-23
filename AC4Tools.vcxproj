@@ -151,6 +151,10 @@
     <None Include="tests\native.cpp" />
     <None Include="tests\dll_smoke.cpp" />
     <None Include="tools\setup_x86.bat" />
+    <None Include="release_assets\loader-manifest.json" />
+    <None Include="release_assets\Ultimate-ASI-Loader-LICENSE.txt" />
+    <None Include="tools\loader-integrity.ps1" />
+    <None Include="release_assets\dinput8.dll" />
     <None Include="release_assets\README.md" />
     <None Include="test.bat" />
     <None Include="tests\release.ps1" />

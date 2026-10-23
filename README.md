@@ -124,6 +124,9 @@ Building the project creates a ready-to-copy folder:
 
 ```text
 release/
+  dinput8.dll
+  LOADER-PROVENANCE.json
+  Ultimate-ASI-Loader-LICENSE.txt
   README.txt
   SHA256SUMS.txt
   scripts/
@@ -133,9 +136,16 @@ release/
 
 Copy the contents of `release/` into the game folder, next to `AC4BFSP.exe`.
 
-Install the **Win32/x86** `dinput8.dll` version of [Ultimate ASI Loader from its upstream project](https://github.com/ThirteenAG/Ultimate-ASI-Loader) separately. AC4Tools does not package, download, or install a loader binary. Existing loader files are left untouched by `install_to_game.ps1`. The historical `release_assets/dinput8.dll` is no longer used by any build or installation script; its upstream provenance has not been verified.
+The package includes the Win32/x86 `dinput8.dll` from [Ultimate ASI Loader v9.7.1](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/tag/v9.7.1), product version `9.7.1.0-2155f21`. The bundled DLL was compared with the DLL extracted from that exact upstream release. The downloaded ZIP also matched GitHub's published archive SHA-256.
 
-`SHA256SUMS.txt` records the generated package files for integrity checks. It does not attest to the provenance of any separate loader.
+`release_assets/loader-manifest.json` pins the upstream release URL, archive URL/hash, member name, and extracted DLL hash. Packaging and installation reject a missing or mismatched loader. The installer checks the source before changing game files, installs the verified loader if absent, and leaves an already matching loader untouched. If an existing loader differs, installation stops without overwriting it; back it up and resolve the difference before retrying.
+
+```text
+DLL SHA256: 7675B24A2E408349C8A59B87E3AE8724AD8A89EFF21C96A9C109650A3C1316E0
+ZIP SHA256: B69853DF1099DE97B9622B9F693F2FC62269CD7774A26408974F1BCABF806FC3
+```
+
+`LOADER-PROVENANCE.json` and the upstream license accompany the package. `SHA256SUMS.txt` covers the ASI, config, README, DLL, provenance manifest, and license. Builds use the local pinned asset and never download a loader automatically.
 
 ## Building
 
@@ -286,7 +296,7 @@ Keyboard hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Cont
 
 - Dear ImGui by Omar Cornut and contributors (v1.90.9)
 - MinHook by Tsuda Kageyu (Includes HDE disassembler code by Vyacheslav Patkov.)
-- Ultimate ASI Loader by ThirteenAG (separate user-installed dependency)
+- Ultimate ASI Loader by ThirteenAG (verified Win32 v9.7.1, MIT license included)
 
 ## Compatibility
 
@@ -306,4 +316,4 @@ Stopping releases cursor/input capture, attempts to disable noclip, clears nativ
 
 `AC4Tools.cpp` assembles private feature fragments under `game_addresses/`, `patches/`, `input/`, `overlay/`, `config/`, `unlock/`, and `runtime/`. The `.inl` files intentionally retain one translation unit and internal linkage for the x86 emitters. Safety helpers for build policy, scanning, numeric parsing, state locking, hook management, and patch ownership have separate headers. Changes to the supported build should start in `game_addresses/SupportedBuild.h`; per-site expected bytes remain mandatory.
 
-Run `test.bat` with Visual Studio C++ tools installed. It builds Release Win32 and runs an isolated executable named `AC4BFSP.exe` whose hash is intentionally unsupported. Tests cover build gates and direct actions, the compiled ASI lifecycle in an unsupported process, guarded/ambiguous pattern scans, malformed/nonfinite numeric input and INI files, overflow boundaries, refusing patches inside an executing instruction, patch ownership and restoration, actual MinHook enable/disable behavior, shutdown and cave lifetime, and packaging/install behavior in a temporary fixture. These checks do not replace in-game testing of supported-build gameplay, controller input, resize/reset, and overlay compatibility.
+Run `test.bat` with Visual Studio C++ tools installed. It builds Release Win32 and runs an isolated executable named `AC4BFSP.exe` whose hash is intentionally unsupported. Tests cover build gates and direct actions, the compiled ASI lifecycle in an unsupported process, guarded/ambiguous pattern scans, malformed/nonfinite numeric input and INI files, overflow boundaries, refusing patches inside an executing instruction, patch ownership and restoration, actual MinHook enable/disable behavior, shutdown and cave lifetime, and packaging/install behavior in a temporary fixture, including rejecting missing/corrupt loaders and preserving a matching locked loader. These checks do not replace in-game testing of supported-build gameplay, controller input, resize/reset, and overlay compatibility.
