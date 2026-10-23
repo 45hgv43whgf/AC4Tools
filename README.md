@@ -4,11 +4,11 @@ AC4Tools is a standalone ASI plugin for **Assassin's Creed IV Black Flag**.
 
 It adds an in-game ImGui menu with ship, player, consumable lock, one-time inventory refills, unlocks, Freedom Cry helpers, noclip, time scale, input/system, and hotkey options. The plugin is intended to be loaded through Ultimate ASI Loader.
 
-Current version: **v1.07**
+Current version: **v1.08**
 
 ## Game Version
 
-AC4Tools was made and tested for the newest(at time of creation) Steam single-player executable:
+Gameplay addresses were developed for this Steam single-player executable:
 
 ```text
 AC4BFSP.exe
@@ -17,7 +17,9 @@ Timestamp: 2023-11-14 14:41:36
 SHA256: 732AAE5679D068EE58736C35D2627473EB6ED34B28A1AE3B11076D7AD3212ACD
 ```
 
-Other game builds may use different code addresses or bytes. If a supported patch check does not match, or another tool already owns that address, AC4Tools refuses that feature instead of patching unknown code. For byte mismatches, it logs the expected and found bytes. Startup diagnostics also log the detected executable name, size, timestamp, and SHA256, and warn when the SHA256 does not match the supported build above.
+All gameplay features require this exact SHA-256 and the original image base (`0x00400000`). A mismatch, failed hash calculation, or relocated image disables gameplay initialization, actions, hotkeys, memory scans, and lazy patch installation before any game addresses are probed. The overlay and System diagnostics remain available. Pattern-based features use the same build gate; there is no unsupported-build override.
+
+On the supported build, individual patch sites must also match their expected bytes. Pattern searches inspect committed executable pages and require a unique match. Unknown or unreadable bytes refuse that feature and are logged. These checks reduce address/build errors; they cannot guarantee compatibility with arbitrary third-party changes to a running game.
 
 ## Features
 
@@ -122,14 +124,18 @@ Building the project creates a ready-to-copy folder:
 
 ```text
 release/
-  dinput8.dll
   README.txt
+  SHA256SUMS.txt
   scripts/
     AC4Tools.asi
     AC4Tools.ini
 ```
 
 Copy the contents of `release/` into the game folder, next to `AC4BFSP.exe`.
+
+Install the **Win32/x86** `dinput8.dll` version of [Ultimate ASI Loader from its upstream project](https://github.com/ThirteenAG/Ultimate-ASI-Loader) separately. AC4Tools does not package, download, or install a loader binary. Existing loader files are left untouched by `install_to_game.ps1`. The historical `release_assets/dinput8.dll` is no longer used by any build or installation script; its upstream provenance has not been verified.
+
+`SHA256SUMS.txt` records the generated package files for integrity checks. It does not attest to the provenance of any separate loader.
 
 ## Building
 
@@ -169,7 +175,7 @@ To install from the prepared release folder:
 .\install_to_game.ps1 -GameDir "C:\Path\To\Assassin's Creed IV Black Flag"
 ```
 
-The install script requires a game path argument. No local game path is hardcoded.
+The install script requires a game path argument. No local game path is hardcoded. Close the game before updating the ASI; existing INI settings are preserved and the previous INI is backed up.
 
 ## Configuration
 
@@ -266,7 +272,7 @@ ExitGamepad = 4098
 
 `EnableConsole = 1` opens a console window. `EnableFile = 1` writes timestamped lines to `AC4Tools.log` in the `scripts` folder next to `AC4Tools.asi`. Both are off by default.
 
-Logs include `[INFO]`, `[WARN]`, and `[ERROR]` levels. When console logging is enabled, warnings are yellow and errors are red. Startup diagnostics print the detected `AC4BFSP.exe` size, timestamp, and SHA256; a SHA256 mismatch is a warning that the game executable may not be the fully supported build.
+Logs include `[INFO]`, `[WARN]`, and `[ERROR]` levels. When console logging is enabled, warnings are yellow and errors are red. Startup diagnostics print the detected `AC4BFSP.exe` size, timestamp, and SHA256; a SHA256 mismatch disables all gameplay features.
 
 `LockMouseToWindow = 1` confines the Windows cursor to the AC4 window while the game is focused. It releases automatically when AC4 loses focus, such as when you alt-tab. This can prevent scrolling or clicking on a second monitor during gameplay.
 
@@ -280,8 +286,24 @@ Keyboard hotkey values are Win32 virtual-key codes. `MenuOpen = 66` is `B`. Cont
 
 - Dear ImGui by Omar Cornut and contributors (v1.90.9)
 - MinHook by Tsuda Kageyu (Includes HDE disassembler code by Vyacheslav Patkov.)
-- Ultimate ASI Loader by ThirteenAG (9.7.1.0-2155f21)
+- Ultimate ASI Loader by ThirteenAG (separate user-installed dependency)
 
 ## Compatibility
 
 AC4Tools is designed to run standalone. If another plugin or external tool already owns the same hook address, AC4Tools refuses that feature cleanly instead of trying to co-load with it.
+
+## Runtime and shutdown
+
+C++ entry points from rendering, window messages, input hooks, game callbacks, and the worker serialize shared state through a recursive lock. WndProc uses a try-lock to avoid deadlocking synchronous window messages. Generated x86 caves communicate through aligned four-byte cells with Interlocked access from C++; hit counters use locked increments. Patch writes pause and inspect peer threads, recheck expected bytes before the first write, and refuse to replace instructions that are currently in progress. Hooks are queued during discovery and enabled only after their original-function pointers are initialized.
+
+XInput support hooks only variants already loaded by the process at initialization. There is no static XInput import and no forced loading of XInput DLLs. Existing variants used for hooks are pinned with the ASI.
+
+The ASI is pinned for the process lifetime before its worker starts. **Hot unload/reload is not supported; restart the game to replace the plugin.** Pinning prevents a loader's FreeLibrary call from invalidating installed callbacks. Tools can request a controlled stop through the Win32 `__stdcall` exports `AC4ToolsRequestShutdown` and poll `AC4ToolsIsStopped` (x86 decorated names `_AC4ToolsRequestShutdown@0` and `_AC4ToolsIsStopped@0`). Call these outside DllMain. Shutdown is asynchronous and may wait for a running unlock scan to finish.
+
+Stopping releases cursor/input capture, attempts to disable noclip, clears native feature flags, disables owned MinHook hooks, restores tracked patches only while their bytes still belong to AC4Tools, restores the window procedure when still owned, and releases ImGui, D3D, controller, console, and unpublished cave resources. Published caves and hook trampolines stay mapped for in-flight return paths; the OS reclaims them at exit. Game-owned community allocations and save/inventory/unlock changes are not rolled back. A stopped ASI remains mapped and cannot be restarted in the same session. Diagnostics report incomplete restoration; restart the game before loading a different version.
+
+## Source layout and verification
+
+`AC4Tools.cpp` assembles private feature fragments under `game_addresses/`, `patches/`, `input/`, `overlay/`, `config/`, `unlock/`, and `runtime/`. The `.inl` files intentionally retain one translation unit and internal linkage for the x86 emitters. Safety helpers for build policy, scanning, numeric parsing, state locking, hook management, and patch ownership have separate headers. Changes to the supported build should start in `game_addresses/SupportedBuild.h`; per-site expected bytes remain mandatory.
+
+Run `test.bat` with Visual Studio C++ tools installed. It builds Release Win32 and runs an isolated executable named `AC4BFSP.exe` whose hash is intentionally unsupported. Tests cover build gates and direct actions, the compiled ASI lifecycle in an unsupported process, guarded/ambiguous pattern scans, malformed/nonfinite numeric input and INI files, overflow boundaries, refusing patches inside an executing instruction, patch ownership and restoration, actual MinHook enable/disable behavior, shutdown and cave lifetime, and packaging/install behavior in a temporary fixture. These checks do not replace in-game testing of supported-build gameplay, controller input, resize/reset, and overlay compatibility.

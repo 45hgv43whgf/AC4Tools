@@ -2,21 +2,8 @@
 setlocal
 
 set "PROJECT_DIR=%~dp0"
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-
-if defined VCToolsInstallDir goto Build
-if not exist "%VSWHERE%" goto NoVisualStudio
-for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
-if not defined VSINSTALL goto NoVisualStudio
-call "%VSINSTALL%\VC\Auxiliary\Build\vcvars32.bat"
+call "%PROJECT_DIR%tools\setup_x86.bat"
 if errorlevel 1 exit /b %errorlevel%
-goto Build
-
-:NoVisualStudio
-echo Error: Visual Studio C++ tools not found. Run this from a Developer Command Prompt or install VS Build Tools.
-exit /b 1
-
-:Build
 
 if not exist "%PROJECT_DIR%bin" mkdir "%PROJECT_DIR%bin"
 if not exist "%PROJECT_DIR%obj" mkdir "%PROJECT_DIR%obj"

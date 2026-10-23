@@ -53,6 +53,12 @@ if (-not (Test-Path -LiteralPath $GameDir)) {
     throw "GameDir does not exist: $GameDir"
 }
 
+foreach ($file in @('scripts\AC4Tools.asi', 'scripts\AC4Tools.ini')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $releaseDir $file) -PathType Leaf)) {
+        throw "Missing release file: $file. Run build.bat first."
+    }
+}
+
 $iniPath = Join-Path $GameDir "scripts\AC4Tools.ini"
 $oldConfig = $null
 if (Test-Path -LiteralPath $iniPath) {
@@ -61,17 +67,8 @@ if (Test-Path -LiteralPath $iniPath) {
 
 New-Item -ItemType Directory -Force -Path (Join-Path $GameDir "scripts") | Out-Null
 
-$loaderSource = Join-Path $releaseDir "dinput8.dll"
-$loaderDest = Join-Path $GameDir "dinput8.dll"
-try {
-    Copy-Item -LiteralPath $loaderSource -Destination $loaderDest -Force
-} catch {
-    if (-not (Test-Path -LiteralPath $loaderDest)) {
-        throw
-    }
-    Write-Warning "Skipped dinput8.dll because it is currently locked; existing loader remains installed."
-}
-
+# The loader is supplied and maintained separately by the user. Never copy or
+# replace a loader DLL from the package, including stale release directories.
 $asiPath = Join-Path $GameDir "scripts\AC4Tools.asi"
 try {
     Copy-Item -LiteralPath (Join-Path $releaseDir "scripts\AC4Tools.asi") -Destination $asiPath -Force
@@ -143,7 +140,8 @@ try {
     throw
 }
 
-Get-Item -LiteralPath (Join-Path $GameDir "dinput8.dll"),
-                      (Join-Path $GameDir "scripts\AC4Tools.asi"),
+Get-Item -LiteralPath (Join-Path $GameDir "scripts\AC4Tools.asi"),
                       $iniPath |
     Select-Object FullName, Length, LastWriteTime
+
+Write-Host "AC4Tools installed. An ASI loader must be installed separately; existing loader files were left untouched."

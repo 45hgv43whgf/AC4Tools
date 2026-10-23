@@ -101,6 +101,37 @@
     <ClCompile Include="third_party\minhook\src\hde\hde32.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="config\Load.inl" />
+    <ClInclude Include="config\Numeric.h" />
+    <ClInclude Include="config\Save.inl" />
+    <ClInclude Include="patches\Actions.inl" />
+    <ClInclude Include="patches\Collectibles.inl" />
+    <ClInclude Include="patches\Emit.inl" />
+    <ClInclude Include="patches\FreeCam.inl" />
+    <ClInclude Include="patches\Install.inl" />
+    <ClInclude Include="patches\Memory.inl" />
+    <ClInclude Include="patches\PatchRegistry.h" />
+    <ClInclude Include="patches\Player.inl" />
+    <ClInclude Include="runtime\AtomicCell.h" />
+    <ClInclude Include="runtime\Console.inl" />
+    <ClInclude Include="runtime\HookManager.h" />
+    <ClInclude Include="runtime\Lifecycle.inl" />
+    <ClInclude Include="runtime\Logging.inl" />
+    <ClInclude Include="runtime\State.inl" />
+    <ClInclude Include="runtime\StateLock.h" />
+    <ClInclude Include="game_addresses\BuildDetection.inl" />
+    <ClInclude Include="game_addresses\BuildPolicy.h" />
+    <ClInclude Include="game_addresses\PatternScan.h" />
+    <ClInclude Include="game_addresses\SupportedBuild.h" />
+    <ClInclude Include="input\Bindings.inl" />
+    <ClInclude Include="input\Capture.inl" />
+    <ClInclude Include="input\Controller.inl" />
+    <ClInclude Include="input\Hooks.inl" />
+    <ClInclude Include="input\Hotkeys.inl" />
+    <ClInclude Include="overlay\Hooks.inl" />
+    <ClInclude Include="overlay\Overlay.inl" />
+    <ClInclude Include="unlock\Inventory.inl" />
+    <ClInclude Include="unlock\Unlocks.inl" />
     <ClInclude Include="third_party\imgui\imgui.h" />
     <ClInclude Include="third_party\imgui\imgui_internal.h" />
     <ClInclude Include="third_party\imgui\backends\imgui_impl_dx11.h" />
@@ -116,7 +147,13 @@
     <None Include="build.bat" />
     <None Include="package_release.bat" />
     <None Include="install_to_game.ps1" />
-    <None Include="release_assets\dinput8.dll" />
+    <None Include="package_release.ps1" />
+    <None Include="tests\native.cpp" />
+    <None Include="tests\dll_smoke.cpp" />
+    <None Include="tools\setup_x86.bat" />
+    <None Include="release_assets\README.md" />
+    <None Include="test.bat" />
+    <None Include="tests\release.ps1" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

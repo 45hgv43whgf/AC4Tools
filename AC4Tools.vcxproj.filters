@@ -31,6 +31,37 @@
     <ClCompile Include="third_party\minhook\src\hde\hde32.c"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="config\Load.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="config\Numeric.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="config\Save.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="patches\Actions.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="patches\Collectibles.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="patches\Emit.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="patches\FreeCam.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="patches\Install.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="patches\Memory.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="patches\PatchRegistry.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="patches\Player.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="runtime\AtomicCell.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="runtime\Console.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="runtime\HookManager.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="runtime\Lifecycle.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="runtime\Logging.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="runtime\State.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="runtime\StateLock.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="game_addresses\BuildDetection.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="game_addresses\BuildPolicy.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="game_addresses\PatternScan.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="game_addresses\SupportedBuild.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="input\Bindings.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="input\Capture.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="input\Controller.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="input\Hooks.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="input\Hotkeys.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="overlay\Hooks.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="overlay\Overlay.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="unlock\Inventory.inl"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="unlock\Unlocks.inl"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="third_party\imgui\imgui.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="third_party\imgui\imgui_internal.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="third_party\imgui\backends\imgui_impl_dx11.h"><Filter>Header Files</Filter></ClInclude>
@@ -43,7 +74,13 @@
   <ItemGroup>
     <ResourceCompile Include="AC4Tools.rc"><Filter>Resource Files</Filter></ResourceCompile>
     <None Include="AC4Tools.ini"><Filter>Resource Files</Filter></None>
-    <None Include="release_assets\dinput8.dll"><Filter>Resource Files</Filter></None>
+    <None Include="package_release.ps1"><Filter>Scripts</Filter></None>
+    <None Include="tests\native.cpp"><Filter>Scripts</Filter></None>
+    <None Include="tests\dll_smoke.cpp"><Filter>Scripts</Filter></None>
+    <None Include="tools\setup_x86.bat"><Filter>Scripts</Filter></None>
+    <None Include="release_assets\README.md"><Filter>Scripts</Filter></None>
+    <None Include="test.bat"><Filter>Scripts</Filter></None>
+    <None Include="tests\release.ps1"><Filter>Scripts</Filter></None>
     <None Include="build.bat"><Filter>Scripts</Filter></None>
     <None Include="package_release.bat"><Filter>Scripts</Filter></None>
     <None Include="install_to_game.ps1"><Filter>Scripts</Filter></None>
